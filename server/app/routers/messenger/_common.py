@@ -257,7 +257,7 @@ def _notify_recipients(db: Session, conv: Conversation, sender: User, skip_ids: 
         if not ids:
             return
         recips = db.query(User).filter(User.id.in_(ids)).all()
-        sender_name = user_fio(sender) or sender.login or "Сообщение"
+        sender_name = moderator_display_name(sender) or "Сообщение"
         title = (conv.title if conv.kind in ("group", "channel") and conv.title else sender_name)
         body = f"{sender_name}: новое сообщение" if conv.kind in ("group", "channel") else "Новое сообщение"
         for u in recips:
@@ -295,7 +295,9 @@ def _notify_loud_mentions(db: Session, conv: Conversation, sender: User, mention
         loud_ids.discard(sender.id)          #отметить самого себя — не событие
         if not loud_ids:
             return
-        sender_name = user_fio(sender) or sender.login or "Собеседник"
+        #Номер, а не фамилия: письмо об отметке из обращения к модерации иначе выдало бы
+        #того, кто отвечал (M02, 21.10.2026).
+        sender_name = moderator_display_name(sender) or "Собеседник"
         where = (conv.title if conv.kind in ("group", "channel") and conv.title
                  else f"переписке с {sender_name}")
         title = "Вас отметили"
@@ -358,6 +360,23 @@ _REVEAL_MODERATORS_TO = frozenset({"admin", "moderator"})
 def moderator_alias(u) -> str:
     """Псевдоним-идентификатор модератора: по нему не восстановить ни логин, ни ФИО."""
     return "moderator:%d" % int(getattr(u, "mod_number", 0) or 0)
+
+
+def _unalias(db: Session, uid: str) -> str:
+    """Настоящий id по псевдониму модератора («moderator:N»); иначе `uid` как есть.
+
+    Клиент видит модератора только псевдонимом и им же называет его в запросах (открыть
+    карточку, исключить из группы, выдать роль). Псевдоним, за которым никого нет, — ''."""
+    uid = str(uid or "")
+    if not uid.startswith("moderator:"):
+        return uid
+    try:
+        number = int(uid.split(":", 1)[1])
+    except ValueError:
+        return ""
+    row = (db.query(User.id).filter(User.role == "moderator", User.mod_number == number,
+                                    User.deleted == False).first())  # noqa: E712
+    return row[0] if row else ""
 
 
 def _masked_for(u, viewer=None) -> bool:
@@ -699,7 +718,7 @@ def _notify_invites(db: Session, conv_id: str, title: str, actor: User) -> None:
                 .filter(ConversationInvite.conversation_id == conv_id).all())
         if not rows:
             return
-        who = user_fio(actor) or actor.login
+        who = moderator_display_name(actor)
         online = _online_logins()
         for inv in rows:
             u = db.query(User).filter(User.id == inv.user_id).first()
@@ -887,6 +906,19 @@ def moderator_display_name(u, allow_login: bool = True) -> str:
     if name or not allow_login:
         return name
     return u.login or u.id
+
+
+def _feed_ref(u) -> tuple:
+    """(id, подпись) человека для строки, которая ложится в ленту НАВСЕГДА.
+
+    🔒 Системное «вступил / вышел / заглушён» хранится одним телом на всех читателей, и
+    замаскировать его по зрителю при чтении нечем. До 21.10.2026 туда писались
+    настоящие id и ФИО модератора (находка M02): «Модератор №3» в ленте соседствовал со
+    строкой «Иванов Иван вступил(а) в группу». Модератор с номером пишется сразу номером,
+    как и в подписи сообщений; кто за номером, админ видит на своей странице."""
+    if _masked_for(u):
+        return moderator_alias(u), moderator_display_name(u)
+    return u.id, (user_fio(u) or u.login or "")
 
 
 #Номер живёт в `models.next_moderator_number`: его зовут админка, консольный скрипт и
@@ -1280,17 +1312,25 @@ _MAX_TEMPLATES = 20
 # ── Открыть/создать личный чат ───────────────────────────────────────────────────────
 def _ensure_direct(db: Session, user: User, peer: User) -> str:
     """id личного чата пары (создать, если его ещё нет). Идемпотентно: id детерминирован.
-    ⚠️ Границы переписки (_guard_direct_allowed) проверяет ВЫЗЫВАЮЩИЙ — тут только беседа."""
-    conv_id = direct_conversation_id(user.id, peer.id)
-    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
-    if conv is None:
-        now = _now()
-        db.add(Conversation(id=conv_id, kind="direct", created_at=now))
-        db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
-                                       role="member", joined_at=now))
-        db.add(ConversationParticipant(conversation_id=conv_id, user_id=peer.id,
-                                       role="member", joined_at=now))
-        db.commit()
+    ⚠️ Границы переписки (_guard_direct_allowed) проверяет ВЫЗЫВАЮЩИЙ — тут только беседа.
+
+    🔒 id беседы виден её участнику (ссылка, адресная строка) и не меняется никогда,
+    поэтому собирается из того же, что пишется в ленту навсегда (`_feed_ref`): модератор —
+    номером. Из настоящих id в адресе лежал бы логин модератора (M02, 21.10.2026). На бою
+    таких бесед не было (проверено 21.10), миграции нет. Прежняя форма ищется вторым
+    кандидатом: роль модератора могли дать после того, как беседа завелась, и без этого у
+    пары оказалось бы две переписки."""
+    conv_id = direct_conversation_id(_feed_ref(user)[0], _feed_ref(peer)[0])
+    for cid in dict.fromkeys((conv_id, direct_conversation_id(user.id, peer.id))):
+        if db.query(Conversation.id).filter(Conversation.id == cid).first():
+            return cid
+    now = _now()
+    db.add(Conversation(id=conv_id, kind="direct", created_at=now))
+    db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
+                                   role="member", joined_at=now))
+    db.add(ConversationParticipant(conversation_id=conv_id, user_id=peer.id,
+                                   role="member", joined_at=now))
+    db.commit()
     return conv_id
 
 
@@ -1890,8 +1930,7 @@ def _handle_mute_command(db: Session, conv_id: str, body: str, user: User,
         raise HTTPException(status_code=400, detail="Нельзя заглушить владельца беседы")
     tp.silenced = not tp.silenced
     db.commit()
-    name = user_fio(target) or target.login
-    sysmsg = _system(db, conv_id, "muted" if tp.silenced else "unmuted", target.id, name)
+    sysmsg = _system(db, conv_id, "muted" if tp.silenced else "unmuted", *_feed_ref(target))
     _broadcast(db, conv_id)
     return sysmsg
 

@@ -46,6 +46,9 @@ const qr = ref(null)          // {size, path} — матрица кода, по�
 const code = ref('')
 const recoveryCodes = ref([])
 const disableCode = ref('')
+//Пароль перед выдачей секрета: живая сессия — не доказательство, что за экраном владелец
+//(общий компьютер аудитории). Хранится только до ответа сервера.
+const currentPassword = ref('')
 
 //На телефоне ведущий путь — кнопка в приложение, на компьютере — QR. Второй путь не
 //исчезает, а сворачивается под ссылку: аутентификатор бывает и на другом устройстве.
@@ -65,7 +68,8 @@ onMounted(load)
 async function begin() {
   busy.value = true; error.value = ''; message.value = ''
   try {
-    const { data } = await authApi.mfaSetup()
+    const { data } = await authApi.mfaSetup(currentPassword.value)
+    currentPassword.value = ''
     secret.value = data.secret
     uri.value = data.uri
     //QR может не прийти от старого сервера — тогда работают ключ и ссылка. Настройка
@@ -261,11 +265,17 @@ function downloadCodes() {
       </p>
 
       <div class="flex flex-wrap items-center gap-3">
-        <button v-if="!status.enabled" type="button" :disabled="busy"
-                class="rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-                @click="begin">
-          {{ busy ? 'Настраиваем…' : 'Настроить второй фактор' }}
-        </button>
+        <template v-if="!status.enabled">
+          <input v-model="currentPassword" type="password" autocomplete="current-password"
+                 placeholder="Текущий пароль" aria-label="Текущий пароль"
+                 class="h-11 w-48 rounded-sm border border-border2 bg-card2 px-3 text-text outline-none focus:border-accent"
+                 @keyup.enter="currentPassword && begin()" />
+          <button type="button" :disabled="busy || !currentPassword"
+                  class="rounded-md bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                  @click="begin">
+            {{ busy ? 'Настраиваем…' : 'Настроить второй фактор' }}
+          </button>
+        </template>
 
         <template v-else>
           <input v-model="disableCode" placeholder="Код из приложения"

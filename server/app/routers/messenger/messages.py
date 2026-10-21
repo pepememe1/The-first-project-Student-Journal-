@@ -164,14 +164,32 @@ def ai_search_messages(conv_id: str, q: str = Query(""), limit: int = Query(30),
         return {"messages": [], "expanded": []}
 
     from ...webdata import load_config
-    from ... import messenger_ai
+    from ... import messenger_ai, message_search
+    from sqlalchemy import func
     extra = messenger_ai.expand_query(load_config(db), needle)
 
-    rows = (_visible_messages_query(db, conv_id, part, user.id)
-            .order_by(Message.id.desc()).limit(2000).all())
+    #🔍 ВСЯ ИСТОРИЯ, А НЕ ПОСЛЕДНИЕ 2000 (21.10.2026). Обычный поиск перешёл на индекс
+    #ещё 20.10, а этот смотрел хвост беседы, и старое сообщение не находилось молча —
+    #ровно тот дефект, который исследование «Математика проекта» и называло. Кандидатов
+    #даёт индекс по каждому термину; видимость решает прежняя дверь. Индекса нет — хвост.
+    qq = _visible_messages_query(db, conv_id, part, user.id)
+    floor = qq.with_entities(func.min(Message.id)).scalar() or 0
+    hits = {}                          #термин → id сообщений, найденных по нему индексом
+    for term in [needle, *extra]:
+        ids = message_search.candidate_ids(db, conv_id, term, min_id=floor)
+        if ids is None:
+            hits = None
+            break
+        hits[term] = set(ids)
+    if hits is not None:
+        pool = set().union(*hits.values()) if hits else set()
+        rows = qq.filter(Message.id.in_(pool)).all() if pool else []
+    else:
+        rows = qq.order_by(Message.id.desc()).limit(2000).all()
     scored = []
     for m in rows:
-        score = messenger_ai.match_score(m.body, needle, extra)
+        found = {t for t, ids in (hits or {}).items() if m.id in ids}
+        score = messenger_ai.match_score(m.body, needle, extra, found)
         if score:
             scored.append((score, m))
     #Сортировка: сначала релевантность, при равной — свежие выше (id убывает).
@@ -810,7 +828,11 @@ def forward_messages(payload: dict = Body(...),
                 fwd_from_sender_id=(src.fwd_from_sender_id or src.sender_id),
                 fwd_from_conv_id=(src.fwd_from_conv_id or src.conversation_id),
                 fwd_from_created_at=(src.fwd_from_created_at or src.created_at),
-                fwd_sender_name=(src.fwd_sender_name or (sender.full_name if sender else "")),
+                #Снимок подписи живёт в сообщении НАВСЕГДА и виден всем в беседе-адресате,
+                #поэтому модератор попадает в него номером (Полковник, 21.10.2026).
+                fwd_sender_name=(src.fwd_sender_name or (
+                    (moderator_display_name(sender) if _masked_for(sender) else sender.full_name)
+                    if sender else "")),
             ))
             made += 1
     #Пересылка в ⚙ — тоже обращение, и маршрут у неё тот же: в одной транзакции (F-14).

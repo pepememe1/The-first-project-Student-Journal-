@@ -55,7 +55,9 @@ export const authApi = {
   // служит короткий challenge из ответа /auth/login. Остальные ручки требуют уже
   // открытой сессии (фактор заводят изнутри кабинета).
   mfaStatus: () => api.get('/auth/mfa/status'),
-  mfaSetup: () => api.post('/auth/mfa/setup'),
+  //Текущий пароль обязателен с 21.10.2026: иначе за чужой открытой сессией фактор
+  //привязывали к своему телефону (`server/app/routers/mfa.py::mfa_setup`).
+  mfaSetup: (current) => api.post('/auth/mfa/setup', { current }),
   mfaConfirm: (code) => api.post('/auth/mfa/confirm', { code }),
   mfaDisable: (code) => api.post('/auth/mfa/disable', { code }),
   mfaRegenerate: (code) => api.post('/auth/mfa/recovery/regenerate', { code }),

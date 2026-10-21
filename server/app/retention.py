@@ -244,6 +244,15 @@ def _prune_push_tokens(db: Session) -> int:
     return rustore_push.prune_stale(db)
 
 
+def _purge_stale_mfa_setups(db: Session) -> int:
+    """Секреты второго фактора, которые начали настраивать и бросили (21.10.2026).
+
+    Правило «что считать брошенным» живёт в `routers/mfa.py` рядом с проверкой срока при
+    подтверждении: две копии полчаса разошлись бы молча."""
+    from .routers import mfa
+    return mfa.purge_stale_setups(db)
+
+
 def run_all(db: Session) -> dict:
     """Один полный проход политики хранения. Ничего не бросает наружу.
 
@@ -261,6 +270,8 @@ def run_all(db: Session) -> dict:
         ("honeypot", lambda: purge_honeypot(db)),
         ("deleted_bodies", lambda: blank_deleted_bodies(db)),
         ("push_tokens", lambda: _prune_push_tokens(db)),
+        #Брошенная настройка второго фактора — секрет без подтверждения (QUEUE п.4).
+        ("mfa_setups", lambda: _purge_stale_mfa_setups(db)),
         #Журнал жёстких удалений синка (его пишут триггеры `sync_clock`, в том числе на
         #уборку надгробий выше) — ПОСЛЕ неё и со сдвигом горизонта: копия с курсором
         #ниже горизонта пересоберётся целиком, а не останется с удалёнными строками (W-16).

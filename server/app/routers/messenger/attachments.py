@@ -30,7 +30,8 @@ from sqlalchemy.orm import Session
 from ... import media_refs, storage
 from ...models import Attachment, Conversation, Message, User, user_fio
 from ._common import (Depends as _D, _conversation, _now, _participant,  # noqa: F401
-                      _personal_view, _require_participant, get_current_user, get_db, router)
+                      _masked_for, _personal_view, _require_participant, get_current_user,
+                      get_db, moderator_alias, moderator_display_name, router)
 
 #Что считаем «медиа», а что «файлом». Гифки и видео-ссылки — медиа, документы — файлы.
 #⚠️ Разделение по СМЫСЛУ, а не по хранилищу: человек ищет «ту картинку» и «тот документ»
@@ -416,6 +417,16 @@ def chat_saved(conv_id: str, user: User = Depends(get_current_user),
     out = []
     for m in rows:
         u = authors.get(m.fwd_from_sender_id)
+        if u is not None and _masked_for(u, user):
+            #Модератор — номером и здесь (Полковник, 21.10.2026): ни id, ни фамилии,
+            #ни аватарки (её адрес несёт настоящий id).
+            out.append({
+                "message_id": m.id, "body": m.body, "kind": m.kind,
+                "sent_at": m.fwd_from_created_at or m.created_at, "saved_at": m.created_at,
+                "from_id": moderator_alias(u), "from_name": moderator_display_name(u),
+                "from_role": "moderator", "from_avatar": "", "from_color": "",
+            })
+            continue
         prefs = (u.prefs if u is not None and isinstance(u.prefs, dict) else {})
         out.append({
             "message_id": m.id, "body": m.body, "kind": m.kind,

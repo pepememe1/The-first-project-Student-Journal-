@@ -109,9 +109,12 @@ def test_blocking_network_never_runs_on_the_event_loop(api):
     видно надёжнее, чем любым выражением."""
     import inspect
 
+    #`_remote_auth()` — продление боевой сессии синхронным requests (до 8+15 с при
+    #медленной сети). В `async def` зовётся только через пул потоков (аудит 22.09.2026,
+    #F-07; сторожа у этой находки не было до 21.10.2026 — ревью 18.09, пункт O05).
     BLOCKING = ("httpx.request(", "httpx.get(", "httpx.post(", "httpx.put(",
                 "httpx.delete(", "requests.get(", "requests.post(", "requests.request(",
-                "time.sleep(")
+                "time.sleep(", "_remote_auth()")
     offenders = []
     lines = inspect.getsource(local_api).splitlines()
     i = 0

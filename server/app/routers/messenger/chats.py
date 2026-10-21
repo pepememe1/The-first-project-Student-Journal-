@@ -13,7 +13,9 @@ from ... import media_refs
 def open_direct(user_id: str, user: User = Depends(get_current_user),
                 db: Session = Depends(get_db)):
     """Открыть личный чат с пользователем (создать, если ещё нет). Идемпотентно — беседа
-    ключуется детерминированным id пары, повторный вызов вернёт ту же."""
+    ключуется детерминированным id пары, повторный вызов вернёт ту же.
+    Модератора студент знает только псевдонимом (`moderator:N`) — его и принимаем (§4.48)."""
+    user_id = _unalias(db, user_id)
     if user_id == user.id:
         raise HTTPException(status_code=400, detail="Нельзя написать самому себе")
     peer = db.query(User).filter(User.id == user_id, User.deleted == False).first()  # noqa: E712
@@ -223,8 +225,16 @@ def list_chats(user: User = Depends(get_current_user), db: Session = Depends(get
         }
         if conv.kind == "direct":
             peer = peer_of.get(conv.id)
-            item["title"] = (user_fio(peer) or peer.login) if peer else "Диалог"
-            item["peer"] = _safe_user(peer, onl, status=statuses.get(peer.id)) if peer else None
+            #Модератор — номером и в заголовке (нашёл Полковник 21.10.2026): карточка `peer`
+            #маскировалась, а заголовок строки рядом отдавал фамилию.
+            if peer is None:
+                item["title"] = "Диалог"
+            elif _masked_for(peer, user):
+                item["title"] = moderator_display_name(peer)
+            else:
+                item["title"] = user_fio(peer) or peer.login
+            item["peer"] = (_safe_user(peer, onl, status=statuses.get(peer.id), viewer=user)
+                            if peer else None)
         else:
             item["title"] = conv.title or ""
             #Аватарка группы/канала. У личного чата её нет намеренно: там лицо беседы —
@@ -381,7 +391,8 @@ def create_group(payload: dict = Body(...), user: User = Depends(get_current_use
                                    role="owner", joined_at=now))
     seen = {user.id}
     invited = 0
-    member_ids = list(payload.get("member_ids") or [])
+    #Модератора клиент знает псевдонимом (лента, «О беседе», F-10) — им его и зовут.
+    member_ids = [_unalias(db, x) for x in (payload.get("member_ids") or [])]
     member_ids.extend(_expand_class_groups(db, user, payload.get("class_groups")))
     for uid in member_ids:
         if uid in seen:
@@ -504,9 +515,8 @@ def accept_invite(conv_id: str, user: User = Depends(get_current_user),
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=user.id,
                                        role="member", joined_at=_now()))
     db.commit()
-    name = user_fio(user) or user.login
     if conv.kind == "group":     #§D6: «вступил» — только для групп
-        _system(db, conv_id, "user_joined", user.id, name)
+        _system(db, conv_id, "user_joined", *_feed_ref(user))
     _broadcast(db, conv_id)
     return {"ok": True, "conversation_id": conv_id}
 
@@ -526,9 +536,8 @@ def decline_invite(conv_id: str, user: User = Depends(get_current_user),
     conv = _conversation(db, conv_id)
     db.delete(inv)
     db.commit()
-    name = user_fio(user) or user.login
     if conv.kind == "group":
-        _system(db, conv_id, "invite_declined", user.id, name)
+        _system(db, conv_id, "invite_declined", *_feed_ref(user))
     _broadcast(db, conv_id)
     return {"ok": True}
 
@@ -555,11 +564,11 @@ def leave_chat(conv_id: str, user: User = Depends(get_current_user), db: Session
     p = _participant(db, conv_id, user.id)
     if p is not None:
         conv = _conversation(db, conv_id)
-        name = user_fio(user) or user.login
+        ref = _feed_ref(user)
         db.delete(p)
         db.commit()
         if conv.kind == "group":       #§D6: «вышел» — только для групп, не для каналов
-            _system(db, conv_id, "user_left", user.id, name)
+            _system(db, conv_id, "user_left", *ref)
         _broadcast(db, conv_id)
     return {"ok": True}
 
@@ -585,7 +594,8 @@ def add_members(conv_id: str, payload: dict = Body(...),
     now = _now()
     added = 0
     joined_names = []
-    wanted = list(payload.get("user_ids") or [])
+    #Модератора клиент знает псевдонимом (лента, «О беседе», F-10) — им его и добавляют.
+    wanted = [_unalias(db, x) for x in (payload.get("user_ids") or [])]
     wanted.extend(_expand_class_groups(db, user, payload.get("class_groups")))
     invited = 0
     for uid in wanted:
@@ -604,7 +614,7 @@ def add_members(conv_id: str, payload: dict = Body(...),
                 invited += 1
             continue
         db.add(ConversationParticipant(conversation_id=conv_id, user_id=uid, role=role, joined_at=now))
-        joined_names.append((uid, user_fio(u) or u.login))
+        joined_names.append(_feed_ref(u))
         added += 1
     db.commit()
     if invited:
@@ -621,7 +631,10 @@ def add_members(conv_id: str, payload: dict = Body(...),
 def remove_member(conv_id: str, uid: str, user: User = Depends(get_current_user),
                   db: Session = Depends(get_db)):
     """Убрать участника (право kick — owner/admin по умолчанию, либо кастомная роль с этим
-    правом); себя может убрать любой (=покинуть). Владельца не трогаем."""
+    правом); себя может убрать любой (=покинуть). Владельца не трогаем.
+
+    Модератора клиент знает только псевдонимом («О беседе», M02) — им его и исключают."""
+    uid = _unalias(db, uid)
     if uid != user.id:
         _require_permission(db, conv_id, user, "kick")
     else:
@@ -630,11 +643,11 @@ def remove_member(conv_id: str, uid: str, user: User = Depends(get_current_user)
     p = _participant(db, conv_id, uid)
     if p is not None and p.role != "owner":
         u = db.query(User).filter(User.id == uid).first()
-        name = (user_fio(u) or u.login) if u else uid
+        ref = _feed_ref(u) if u else (uid, uid)
         db.delete(p)
         db.commit()
         if conv.kind == "group":        #§D6: «вышел» — только для групп
-            _system(db, conv_id, "user_left", uid, name)
+            _system(db, conv_id, "user_left", *ref)
         _broadcast(db, conv_id)
     return {"ok": True}
 
@@ -646,7 +659,7 @@ def set_member_role(conv_id: str, uid: str, payload: dict = Body(...),
     взаимоисключающе). Право manage_roles — по умолчанию owner/admin, либо обладатель
     кастомной роли с этим правом (см. _permissions_for). Владельца не понижаем этим путём."""
     _require_permission(db, conv_id, user, "manage_roles")
-    tp = _participant(db, conv_id, uid)
+    tp = _participant(db, conv_id, _unalias(db, uid))
     if tp is None:
         raise HTTPException(status_code=404, detail="Участник не найден")
     if tp.role == "owner":
@@ -761,6 +774,26 @@ def unignore_member(conv_id: str, uid: str, user: User = Depends(get_current_use
     return {"ok": True}
 
 
+def _masked_participant(u, p, alias: str, custom_role_name: str) -> dict:
+    """Строка состава беседы для модератора, личность которого зрителю не положена.
+
+    Форма та же, что у обычной строки (клиенту не нужна своя ветка), но всё личное пусто:
+    по аватарке, «О себе» и оформлению имени человека узнают так же уверенно, как по
+    фамилии. Роль в беседе, «/mute» и отметка прочтения остаются — это не личность, а
+    состояние участника, и без отметки пропали бы галочки «прочитано» в обращении."""
+    return {
+        "user_id": alias, "full_name": moderator_display_name(u) if u else alias,
+        "role": p.role, "custom_role_id": p.custom_role_id or None,
+        "custom_role_name": custom_role_name,
+        "silenced": bool(p.silenced), "online": False,
+        "avatar": "", "bio": "", "profile_color": "", "profile_banner": "",
+        "name_font": "", "name_effect": "", "name_color": "",
+        "user_role": "moderator", "group_name": "", "subjects": [],
+        "status_kind": "", "status_text": "",
+        "last_read_at": p.last_read_at or "", "masked": True,
+    }
+
+
 def _tracker_enabled(db: Session, conv_id: str) -> bool:
     """Включён ли трекер задач в беседе (строка настроек есть и флаг поднят)."""
     st = db.get(TrackerSettings, conv_id)
@@ -783,9 +816,17 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
     crole_ids = {p.custom_role_id for p in parts if p.custom_role_id}
     croles = {r.id: r.name for r in (db.query(ConversationRole)
               .filter(ConversationRole.id.in_(crole_ids)).all())} if crole_ids else {}
+    #🔒 Модератор в составе беседы — номером, а не человеком (находка 17.10.2026, M02).
+    #Лента и карточка профиля маскировали его с 22.09 (F-10), а этот список отдавал id,
+    #ФИО, аватарку и группу как есть: «Модератор №3» раскрывался открытием «О беседе».
+    aliases = _sender_aliases(db, [p.user_id for p in parts], user.id)
     people = []
     for p in parts:
         u = urows.get(p.user_id)
+        if p.user_id in aliases:
+            people.append(_masked_participant(u, p, aliases[p.user_id],
+                                              croles.get(p.custom_role_id, "")))
+            continue
         prefs = (u.prefs if u is not None and isinstance(u.prefs, dict) else {})
         st = sm.get(p.user_id, {})
         people.append({
@@ -822,7 +863,8 @@ def conversation_info(conv_id: str, user: User = Depends(get_current_user),
                                          ConversationIgnore.viewer_id == user.id).all())]
     return {"conversation_id": conv.id, "kind": conv.kind, "title": conv.title,
             "avatar": media_refs.avatar_out(conv.avatar, "c", conv.id),
-            "about": conv.about, "owner_id": conv.owner_id, "is_public": conv.is_public,
+            "about": conv.about, "owner_id": aliases.get(conv.owner_id, conv.owner_id),
+            "is_public": conv.is_public,
             "my_role": part.role, "participants": people, "subscribers": len(people),
             #Свой id клиент иначе не знает (в JWT/сторе только логин+роль) — нужен, чтобы
             #не рисовать кнопки «Выгнать»/«Игнорировать» на собственной строке участника.

@@ -61,14 +61,10 @@ def _user_by_public_id(db: Session, user_id: str):
 
     Клиент видит модератора только псевдонимом (F-10) и по нему же открывает карточку —
     поэтому псевдоним разрешается здесь, а наружу карточка уходит снова замаскированной."""
-    if (user_id or "").startswith("moderator:"):
-        try:
-            number = int(user_id.split(":", 1)[1])
-        except ValueError:
-            return None
-        return (db.query(User).filter(User.role == "moderator", User.mod_number == number,
-                                      User.deleted == False).first())  # noqa: E712
-    return db.query(User).filter(User.id == user_id, User.deleted == False).first()  # noqa: E712
+    real = _unalias(db, user_id)
+    if not real:
+        return None
+    return db.query(User).filter(User.id == real, User.deleted == False).first()  # noqa: E712
 
 
 @router.get("/users/{user_id}/profile")

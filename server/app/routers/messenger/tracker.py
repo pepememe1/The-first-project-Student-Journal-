@@ -182,17 +182,28 @@ def _can_manage(db: Session, part: ConversationParticipant, st) -> bool:
     return bool(st is not None and st.open_edit)
 
 
-def _members(db: Session, conv_id: str) -> list:
+def _members(db: Session, conv_id: str, aliases: dict = None) -> list:
     """Участники беседы — те, кого можно назначить. Подпись — той же дверью, что у
-    сообщений (`moderator_display_name`): модератор виден номером и здесь."""
+    сообщений (`moderator_display_name`): модератор виден номером и здесь.
+
+    🔒 Номером — и id тоже (M02, 21.10.2026): до этого подпись была «Модератор №3», а рядом
+    уходили его настоящий id, аватарка и группа. `aliases` — {настоящий id: псевдоним} для
+    зрителя (`_sender_aliases`); не передан — маскируем всех модераторов с номером."""
     parts = (db.query(ConversationParticipant)
              .filter(ConversationParticipant.conversation_id == conv_id).all())
     urows = {u.id: u for u in db.query(User).filter(
         User.id.in_([p.user_id for p in parts]))} if parts else {}
+    if aliases is None:
+        aliases = _sender_aliases(db, list(urows), "")
     out = []
     for p in parts:
         u = urows.get(p.user_id)
         if u is None:
+            continue
+        if u.id in aliases:
+            out.append({"user_id": aliases[u.id], "full_name": moderator_display_name(u),
+                        "avatar": "", "profile_color": "", "user_role": "moderator",
+                        "group_name": "", "role": p.role, "masked": True})
             continue
         prefs = u.prefs if isinstance(u.prefs, dict) else {}
         out.append({
@@ -208,7 +219,9 @@ def _members(db: Session, conv_id: str) -> list:
     return out
 
 
-def _task_out(t: TrackerTask, key: str, assignees: list, comments: int) -> dict:
+def _task_out(t: TrackerTask, key: str, assignees: list, comments: int,
+              aliases: dict = None) -> dict:
+    aliases = aliases or {}
     return {
         "id": t.id, "project_id": t.project_id, "column_id": t.column_id,
         "number": int(t.number or 0), "key": f"{key}-{int(t.number or 0)}" if key else "",
@@ -219,8 +232,9 @@ def _task_out(t: TrackerTask, key: str, assignees: list, comments: int) -> dict:
         "position": int(t.position or 0),
         "labels": list(t.labels or []), "checklist": list(t.checklist or []),
         "parent_id": t.parent_id or "", "links": list(t.links or []),
-        "assignees": assignees, "comment_count": comments,
-        "created_by": t.created_by or "", "created_at": t.created_at or "",
+        "assignees": [aliases.get(a, a) for a in assignees], "comment_count": comments,
+        "created_by": aliases.get(t.created_by, t.created_by or ""),
+        "created_at": t.created_at or "",
         "updated_at": t.updated_at or "", "completed_at": t.completed_at or "",
     }
 
@@ -246,8 +260,10 @@ def _state(db: Session, conv: Conversation, part: ConversationParticipant, user:
         #Выключенный трекер данных не отдаёт вовсе — даже тем, кто их когда-то видел.
         return {**base, "members": [], "projects": [], "tasks": []}
     cid = conv.id
-    members = _members(db, cid)
-    member_ids = {m["user_id"] for m in members}
+    #Настоящие id — для отбора исполнителей; наружу модератор уходит псевдонимом (M02).
+    member_ids = set(_participant_ids(db, cid))
+    aliases = _sender_aliases(db, member_ids, user.id)
+    members = _members(db, cid, aliases)
     projects = (db.query(TrackerProject).filter(TrackerProject.conversation_id == cid)
                 .order_by(TrackerProject.position, TrackerProject.created_at).all())
     columns = (db.query(TrackerColumn).filter(TrackerColumn.conversation_id == cid)
@@ -278,10 +294,11 @@ def _state(db: Session, conv: Conversation, part: ConversationParticipant, user:
             "color": p.color or "", "position": int(p.position or 0),
             "archived": bool(p.archived), "labels": list(p.labels or []),
             "columns": cols_by_project.get(p.id, []),
-            "created_by": p.created_by or "", "created_at": p.created_at or "",
+            "created_by": aliases.get(p.created_by, p.created_by or ""),
+            "created_at": p.created_at or "",
         } for p in projects],
         "tasks": [_task_out(t, keys.get(t.project_id, ""), by_task.get(t.id, []),
-                            int(counts.get(t.id, 0))) for t in tasks],
+                            int(counts.get(t.id, 0)), aliases) for t in tasks],
     }
 
 
@@ -329,7 +346,7 @@ def tracker_settings(conv_id: str, payload: dict = Body(...),
         #Сбой сообщения настройку не отменяет: она уже сохранена.
         try:
             _system(db, conv_id, "tracker_on" if st.enabled else "tracker_off",
-                    user.id, moderator_display_name(user) or user.login or "")
+                    *_feed_ref(user))
         except Exception as e:      # noqa: BLE001
             db.rollback()
             _hook_log.warning("трекер: системное сообщение не записано: %s", e)
@@ -534,7 +551,8 @@ def _set_assignees(b: _Batch, task: TrackerTask, raw, log: bool = True) -> None:
     """Привести исполнителей задачи к списку `raw`. Новых — запомнить для письма."""
     wanted = []
     for uid in (raw if isinstance(raw, list) else []):
-        uid = str(uid or "")
+        #Модератора клиент знает псевдонимом (M02) — им его и назначают.
+        uid = _unalias(b.db, str(uid or ""))
         #Назначить можно только участника ЭТОЙ беседы: иначе письмо «вам дали задание»
         #получил бы посторонний, а в нём — название беседы и задачи.
         if uid in b.member_ids and uid not in wanted:
@@ -1157,7 +1175,9 @@ def _notify_assigned(b: _Batch) -> int:
                 db, u.login, "tracker", title,
                 "Откройте письмо, чтобы посмотреть задачу и срок.",
                 payload={"conversation_id": b.conv.id, "conversation": b.conv.title or "",
-                         "assigned_by": by_name, "assigned_by_id": b.user.id,
+                         "assigned_by": by_name,
+                         "assigned_by_id": (moderator_alias(b.user) if _masked_for(b.user, u)
+                                            else b.user.id),
                          "tasks": items},
                 author_login=b.user.login or "")
             sent += 1
@@ -1193,13 +1213,24 @@ def tracker_task_details(conv_id: str, task_id: str,
     history = (db.query(TrackerActivity).filter(TrackerActivity.task_id == task_id)
                .order_by(TrackerActivity.id).all())
     names = _names_for(db, {r.author_id for r in comments} | {r.actor_id for r in history})
+    #Модератор — псевдонимом и здесь (M02): автор комментария, кто двигал задачу и кого
+    #назначили (`data.user_id` в истории).
+    people = ({r.author_id for r in comments} | {r.actor_id for r in history}
+              | {(r.data or {}).get("user_id") for r in history if isinstance(r.data, dict)})
+    aliases = _sender_aliases(db, people, user.id)
+
+    def _data_out(d):
+        if isinstance(d, dict) and d.get("user_id") in aliases:
+            return {**d, "user_id": aliases[d["user_id"]]}
+        return d or {}
+
     return {
-        "comments": [{"id": r.id, "author_id": r.author_id,
+        "comments": [{"id": r.id, "author_id": aliases.get(r.author_id, r.author_id),
                       "author_name": names.get(r.author_id, ""),
                       "body": r.body or "", "created_at": r.created_at or "",
                       "mine": r.author_id == user.id} for r in comments],
-        "history": [{"id": r.id, "actor_id": r.actor_id,
+        "history": [{"id": r.id, "actor_id": aliases.get(r.actor_id, r.actor_id),
                      "actor_name": names.get(r.actor_id, ""), "kind": r.kind or "",
-                     "data": r.data or {}, "created_at": r.created_at or ""}
+                     "data": _data_out(r.data), "created_at": r.created_at or ""}
                     for r in history],
     }

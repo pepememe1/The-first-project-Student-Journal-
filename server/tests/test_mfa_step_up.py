@@ -60,8 +60,9 @@ def _headers(client, login, password):
 
 
 def _enable_mfa(client, headers):
-    """Пройти путь человека целиком: секрет → подтверждение кодом."""
-    r = client.post("/auth/mfa/setup", headers=headers)
+    """Пройти путь человека целиком: секрет → подтверждение кодом. Начало настройки
+    спрашивает текущий пароль (21.10.2026)."""
+    r = client.post("/auth/mfa/setup", headers=headers, json={"current": OLD_PW})
     assert r.status_code == 200, r.text
     secret = r.json()["secret"]
     r = client.post("/auth/mfa/confirm", headers=headers, json={"code": totp.code(secret)})
@@ -371,7 +372,7 @@ def test_setup_gives_both_ways_to_add_the_account(client):
     нужен куаркод».
     """
     admin = make_admin(client)
-    r = client.post("/auth/mfa/setup", headers=admin)
+    r = client.post("/auth/mfa/setup", headers=admin, json={"current": "adminpass1"})
     assert r.status_code == 200, r.text
     data = r.json()
 
@@ -397,7 +398,7 @@ def test_the_qr_encodes_exactly_the_same_uri(client):
     from app import qr as qr_mod
 
     admin = make_admin(client)
-    data = client.post("/auth/mfa/setup", headers=admin).json()
+    data = client.post("/auth/mfa/setup", headers=admin, json={"current": "adminpass1"}).json()
     assert decode(qr_mod.matrix(data["uri"])) == data["uri"]
 
 

@@ -105,19 +105,24 @@ def expand_query(cfg: dict, query: str) -> list:
     return out
 
 
-def match_score(body: str, primary: str, extra_terms: list) -> int:
+def match_score(body: str, primary: str, extra_terms: list, by_index=()) -> int:
     """Насколько сообщение подходит запросу. 0 — не подходит.
 
     Прямое совпадение с исходным запросом всегда весомее, чем совпадение с придуманным
-    моделью синонимом: то, что человек написал сам, — самый надёжный сигнал."""
+    моделью синонимом: то, что человек написал сам, — самый надёжный сигнал.
+    `by_index` — термины, по которым сообщение нашёл полнотекстовый индекс
+    (`message_search`): он видит словоформы («оценкой» → «оценки»), а подстрока нет.
+    ⚠️ Совпадение по индексу — это «все слова запроса есть, в любых формах и порядке», а
+    не фраза целиком. Считаем его тем же прямым совпадением осознанно: это слова самого
+    человека, и ставить их ниже синонима от модели было бы неверно (Полковник, 21.10)."""
     low = (body or "").lower()
     if not low:
         return 0
     score = 0
-    if primary and primary in low:
+    if primary and (primary in low or primary in by_index):
         score += 10
     for term in extra_terms:
-        if term in low:
+        if term in low or term in by_index:
             score += 1
     return score
 

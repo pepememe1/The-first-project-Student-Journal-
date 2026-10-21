@@ -37,6 +37,32 @@ def test_message_older_than_the_last_2000_is_found(client):
     assert _search(client, t, conv, "зебра") == ["Пароль от вайфая в 728: зебра"]
 
 
+def test_smart_search_also_looks_past_the_last_2000(client, monkeypatch):
+    """Умный поиск (`ai-search`) тоже смотрит всю историю (21.10.2026). Обратный ход:
+    вернуть ему выборку «последние 2000» — тест краснеет."""
+    from app.db import SessionLocal
+    from app.models import Message
+    from app import messenger_ai
+    monkeypatch.setattr(messenger_ai, "expand_query", lambda cfg, q: ["дз"])
+    admin, t = _people(client)
+    conv = _conv(client, t)
+    client.post(f"/web/messenger/chats/{conv}/messages",
+                json={"body": "Домашку по физике сдать до пятницы"}, headers=t)
+    with SessionLocal() as db:
+        db.add_all(Message(conversation_id=conv, sender_id="teach:teacher1",
+                           body=f"шум {i}", created_at="2026-10-20T00:00:00", kind="text")
+                   for i in range(2100))
+        db.commit()
+    r = client.get(f"/web/messenger/chats/{conv}/messages/ai-search",
+                   params={"q": "домашку"}, headers=t)
+    assert r.status_code == 200, r.text
+    assert [m["body"] for m in r.json()["messages"]] == ["Домашку по физике сдать до пятницы"]
+    #Словоформа по индексу тоже засчитывается: «домашкой» → «Домашку».
+    r = client.get(f"/web/messenger/chats/{conv}/messages/ai-search",
+                   params={"q": "домашкой"}, headers=t)
+    assert [m["body"] for m in r.json()["messages"]] == ["Домашку по физике сдать до пятницы"]
+
+
 def test_word_forms_are_found_by_stem(client):
     admin, t = _people(client)
     conv = _conv(client, t)

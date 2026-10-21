@@ -126,3 +126,181 @@ def test_masking_is_the_default_when_the_viewer_is_unknown():
         id, role = "admin:a", "admin"
 
     assert _safe_user(U(), viewer=Admin())["full_name"] == "Фамилия"
+
+
+# ── «О беседе», лента группы и трекер (находка 17.10.2026, M02; починено 21.10.2026) ──
+#Подпись «Модератор №N» стояла и здесь, но рядом уходили настоящий id, аватарка и группа,
+#а строка «вступил/вышел» навсегда записывала в ленту фамилию.
+#Обратный ход (проверен): убрать ветку `aliases` в `conversation_info` — краснеет
+#`test_conversation_info_shows_the_moderator_by_number_only`; вернуть `user.id, name`
+#в «вышел» у `remove_member` — `test_owner_removes_the_moderator_by_alias…`; убрать
+#псевдоним из `_members`/`_task_out` трекера — `test_tracker_shows_the_moderator_by_number_only`.
+
+def _real_id(login=SECRET_LOGIN):
+    from app.db import SessionLocal
+    from app.models import User
+    db = SessionLocal()
+    try:
+        return db.query(User.id).filter(User.login == login).scalar()
+    finally:
+        db.close()
+
+
+def _group_with_moderator(client):
+    """Преподаватель зовёт модератора в группу ПСЕВДОНИМОМ — другого id он не знает."""
+    from conftest import make_teacher
+    admin, bob, _mod, conv = _ticket_with_moderator_reply(client)
+    alias = next(m for m in _bob_messages(client, bob, conv)
+                 if m["body"] == "Здравствуйте, разберёмся")["sender_id"]
+    teacher = make_teacher(client, admin, login="tgroup")
+    r = client.post("/web/messenger/chats/group", headers=teacher,
+                    json={"title": "Курсовой проект", "member_ids": [alias, "stud:bob"]})
+    assert r.status_code == 200, r.text
+    return admin, teacher, bob, alias, r.json()["conversation_id"]
+
+
+def _leaks(payload) -> list:
+    dump = json.dumps(payload, ensure_ascii=False)
+    return [s for s in (SECRET_LOGIN, SECRET_NAME, _real_id()) if s and s in dump]
+
+
+def test_conversation_info_shows_the_moderator_by_number_only(client):
+    admin, _teacher, bob, alias, gid = _group_with_moderator(client)
+    info = client.get(f"/web/messenger/chats/{gid}", headers=bob).json()
+    row = next(p for p in info["participants"] if p.get("masked"))
+    assert row["user_id"] == alias and row["full_name"].startswith("Модератор №")
+    assert row["avatar"] == "" and row["group_name"] == "" and row["bio"] == ""
+    assert _leaks(info) == [], "личность модератора ушла в «О беседе»"
+    #Администратор видит человека, как и в карточке профиля.
+    staff = client.get(f"/web/messenger/chats/{gid}", headers=admin)
+    if staff.status_code == 200:      #админ может и не быть участником — тогда 403
+        assert SECRET_NAME in json.dumps(staff.json(), ensure_ascii=False)
+
+
+def test_owner_removes_the_moderator_by_alias_and_the_feed_keeps_the_number(client):
+    _admin, teacher, bob, alias, gid = _group_with_moderator(client)
+    r = client.delete(f"/web/messenger/chats/{gid}/members/{alias}", headers=teacher)
+    assert r.status_code == 200, r.text
+    info = client.get(f"/web/messenger/chats/{gid}", headers=bob).json()
+    assert not any(p.get("masked") for p in info["participants"]), "модератор не исключён"
+    feed = client.get(f"/web/messenger/chats/{gid}/messages", headers=bob).json()["messages"]
+    left = [m for m in feed if m.get("kind") == "system" and "user_left" in m["body"]]
+    assert left, "строки «вышел» нет"
+    assert _leaks(feed) == [], "лента записала фамилию модератора навсегда"
+
+
+def test_tracker_shows_the_moderator_by_number_only(client):
+    _admin, teacher, bob, alias, gid = _group_with_moderator(client)
+    url = f"/web/messenger/chats/{gid}/tracker"
+    assert client.put(url + "/settings", headers=teacher,
+                      json={"enabled": True}).status_code == 200
+    import uuid
+    pid, tid = "trkp:" + uuid.uuid4().hex, "trkt:" + uuid.uuid4().hex
+    res = client.post(url + "/save", headers=teacher, json={"ops": [
+        {"op": "project.create", "id": pid, "title": "Курсовая"}]}).json()
+    todo = next(c["id"] for p in res["state"]["projects"] if p["id"] == pid
+                for c in p["columns"] if c["kind"] == "todo")
+    res = client.post(url + "/save", headers=teacher, json={"ops": [
+        {"op": "task.create", "id": tid, "column_id": todo, "title": "Проверить главу",
+         "assignees": [alias]}]}).json()
+    assert res["skipped"] == [], res["skipped"]
+    state = client.get(url, headers=bob).json()
+    assert _task_of(state, tid)["assignees"] == [alias], "назначение по псевдониму не легло"
+    assert any(m["user_id"] == alias and m.get("masked") for m in state["members"])
+    assert _leaks(state) == [], "личность модератора ушла в трекер"
+    details = client.get(f"{url}/tasks/{tid}/details", headers=bob).json()
+    assert _leaks(details) == [], "личность модератора ушла в историю задачи"
+
+
+def _task_of(state, tid):
+    return next(t for t in state["tasks"] if t["id"] == tid)
+
+
+# ── Нашёл Полковник 21.10.2026 после первой починки M02 ──────────────────────────────
+#Обратный ход (проверен): вернуть `user_fio(peer)` в заголовок личного чата — краснеет
+#`test_direct_chat_with_a_moderator_is_titled_by_number`; вернуть `sender.full_name` в
+#снимок пересылки или убрать маску в `chat_saved` — `test_forwarded_moderator_message_…`.
+
+def test_direct_chat_with_a_moderator_is_titled_by_number(client):
+    _admin, bob, mod, _conv = _ticket_with_moderator_reply(client)
+    r = client.post("/web/messenger/chats/direct/stud:bob", headers=mod)
+    assert r.status_code == 200, r.text
+    chats = client.get("/web/messenger/chats", headers=bob).json()
+    rows = chats["chats"] if isinstance(chats, dict) else chats
+    item = next(c for c in rows if c.get("kind") == "direct")
+    assert item["title"].startswith("Модератор №"), item["title"]
+    #Адрес беседы — тоже: он виден в ссылке и в адресной строке.
+    assert _leaks(item) == [], "личность модератора в списке чатов или в адресе беседы"
+
+
+# ── id личного чата (остаток M02, закрыт 21.10.2026) ─────────────────────────────────
+#Обратный ход (проверен): собрать id из `user.id, peer.id` — краснеют оба первых теста;
+#убрать второго кандидата в `_ensure_direct` — `…started_before_the_fix…`; убрать
+#`_unalias` в `open_direct` — `…same_from_both_sides`.
+
+def test_direct_chat_id_is_the_same_from_both_sides(client):
+    """Беседа одна, с какой стороны её ни открой; студент открывает по псевдониму —
+    другого id модератора он не знает."""
+    _admin, bob, mod, conv = _ticket_with_moderator_reply(client)
+    alias = next(m for m in _bob_messages(client, bob, conv)
+                 if m["body"] == "Здравствуйте, разберёмся")["sender_id"]
+    from_mod = client.post("/web/messenger/chats/direct/stud:bob", headers=mod).json()
+    from_bob = client.post(f"/web/messenger/chats/direct/{alias}", headers=bob)
+    assert from_bob.status_code == 200, from_bob.text
+    assert from_bob.json()["conversation_id"] == from_mod["conversation_id"]
+    assert alias in from_mod["conversation_id"], from_mod["conversation_id"]
+    assert _leaks(from_bob.json()) == [], "личность модератора в ответе на открытие чата"
+
+
+def test_an_ordinary_pair_keeps_the_old_chat_id(client):
+    """Без модератора id прежний: на бою 44 личных чата, и новая формула не имеет права
+    завести им двойников (замечание Полковника 21.10.2026)."""
+    from conftest import make_teacher
+    from app.models import direct_conversation_id
+    admin = make_admin(client)
+    _sid, bob = _student(client, admin)
+    teacher = make_teacher(client, admin, login="tpair")
+    r = client.post("/web/messenger/chats/direct/stud:bob", headers=teacher)
+    assert r.status_code == 200, r.text
+    assert r.json()["conversation_id"] == direct_conversation_id(_real_id("tpair"), "stud:bob")
+
+
+def test_a_direct_chat_started_before_the_fix_is_not_split(client):
+    """Беседа по прежней формуле (из настоящих id) находится, а не заводится вторая рядом.
+    На бою таких 21.10.2026 не было — это страховка на случай, когда роль модератора дали
+    человеку, который уже переписывался."""
+    from app.db import SessionLocal
+    from app.models import Conversation, ConversationParticipant, direct_conversation_id
+    _admin, _bob, mod, _conv = _ticket_with_moderator_reply(client)
+    real = _real_id()
+    legacy = direct_conversation_id(real, "stud:bob")
+    db = SessionLocal()
+    try:
+        db.add(Conversation(id=legacy, kind="direct", created_at="2026-10-01 00:00:00"))
+        for uid in (real, "stud:bob"):
+            db.add(ConversationParticipant(conversation_id=legacy, user_id=uid,
+                                           role="member", joined_at="2026-10-01 00:00:00"))
+        db.commit()
+    finally:
+        db.close()
+    r = client.post("/web/messenger/chats/direct/stud:bob", headers=mod)
+    assert r.status_code == 200, r.text
+    assert r.json()["conversation_id"] == legacy, "у пары завелась вторая переписка"
+
+
+def test_forwarded_moderator_message_keeps_the_number(client):
+    _admin, bob, _mod, conv = _ticket_with_moderator_reply(client)
+    reply = next(m for m in _bob_messages(client, bob, conv)
+                 if m["body"] == "Здравствуйте, разберёмся")
+    saved = client.post("/web/messenger/chats/saved", headers=bob).json()["conversation_id"]
+    r = client.post("/web/messenger/messages/forward", headers=bob,
+                    json={"message_ids": [reply["id"]], "to_conversation_ids": [saved]})
+    assert r.status_code == 200, r.text
+    #Подпись «Переслано от …» в самом сообщении — снимок, который живёт вечно.
+    fwd = _bob_messages(client, bob, saved)
+    assert fwd and all(SECRET_NAME not in json.dumps(m, ensure_ascii=False) for m in fwd)
+    assert any((m.get("forwarded_from") or "").startswith("Модератор №") for m in fwd)
+    #Вкладка «Избранное» исходной беседы.
+    tab = client.get(f"/web/messenger/chats/{conv}/saved", headers=bob).json()["saved"]
+    assert tab and tab[0]["from_id"].startswith("moderator:")
+    assert _leaks(tab) == [], "личность модератора ушла во вкладку «Избранное»"

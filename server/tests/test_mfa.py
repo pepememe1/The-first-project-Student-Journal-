@@ -27,9 +27,11 @@ def _next_code(secret):
     return totp.code(secret, at=time.time() + totp.STEP_SECONDS)
 
 
-def _enable_mfa(client, headers):
-    """Пройти путь человека целиком: получить секрет, подтвердить кодом."""
-    r = client.post("/auth/mfa/setup", headers=headers)
+def _enable_mfa(client, headers, password="adminpass1"):
+    """Пройти путь человека целиком: получить секрет, подтвердить кодом.
+
+    Начало настройки спрашивает текущий пароль (21.10.2026, `mfa_setup`)."""
+    r = client.post("/auth/mfa/setup", headers=headers, json={"current": password})
     assert r.status_code == 200, r.text
     secret = r.json()["secret"]
     r = client.post("/auth/mfa/confirm", headers=headers,
@@ -94,7 +96,7 @@ def test_factor_does_not_work_until_confirmed(client):
     Иначе человек запер бы себя навсегда: секрет в базе есть, в телефоне нет.
     """
     headers = make_admin(client)
-    client.post("/auth/mfa/setup", headers=headers)
+    client.post("/auth/mfa/setup", headers=headers, json={"current": "adminpass1"})
     assert client.get("/auth/mfa/status", headers=headers).json()["enabled"] is False
 
     r = client.post("/auth/login", json={"login": "admin", "password": "adminpass1"})
@@ -119,7 +121,7 @@ def test_setup_cannot_be_restarted_while_the_factor_is_on(client):
     """🔒 Иначе добравшийся до открытой сессии просто перезаведёт фактор на себя."""
     headers = make_admin(client)
     _enable_mfa(client, headers)
-    r = client.post("/auth/mfa/setup", headers=headers)
+    r = client.post("/auth/mfa/setup", headers=headers, json={"current": "adminpass1"})
     assert r.status_code == 409
 
 
@@ -150,7 +152,7 @@ def test_login_with_the_factor_gives_no_token_at_all(client):
     а именно отсутствие токена.
     """
     headers = _teacher(client)
-    _enable_mfa(client, headers)
+    _enable_mfa(client, headers, TEACHER_PASS)
 
     r = client.post("/auth/login", json={"login": TEACHER_LOGIN, "password": TEACHER_PASS})
     assert r.status_code == 200, r.text
@@ -164,7 +166,7 @@ def test_login_with_the_factor_gives_no_token_at_all(client):
 def test_the_challenge_is_not_a_working_access_token(client):
     """🔒 Подпись у него та же — годиться как пропуск он не должен."""
     headers = _teacher(client)
-    _enable_mfa(client, headers)
+    _enable_mfa(client, headers, TEACHER_PASS)
     challenge = client.post("/auth/login",
                             json={"login": TEACHER_LOGIN, "password": TEACHER_PASS}).json()["challenge"]
 
@@ -177,7 +179,7 @@ def test_the_challenge_is_not_a_working_access_token(client):
 
 def test_correct_code_completes_the_login(client):
     headers = _teacher(client)
-    secret, _codes = _enable_mfa(client, headers)
+    secret, _codes = _enable_mfa(client, headers, TEACHER_PASS)
     challenge = client.post("/auth/login",
                             json={"login": TEACHER_LOGIN, "password": TEACHER_PASS}).json()["challenge"]
 
@@ -188,7 +190,7 @@ def test_correct_code_completes_the_login(client):
 
 def test_wrong_code_does_not_complete_the_login(client):
     headers = _teacher(client)
-    _enable_mfa(client, headers)
+    _enable_mfa(client, headers, TEACHER_PASS)
     challenge = client.post("/auth/login",
                             json={"login": TEACHER_LOGIN, "password": TEACHER_PASS}).json()["challenge"]
     r = client.post("/auth/mfa/verify", json={"challenge": challenge, "code": "000000"})
@@ -198,7 +200,7 @@ def test_wrong_code_does_not_complete_the_login(client):
 def test_a_recovery_code_works_exactly_once(client):
     """Потерянный телефон — это то, ради чего коды и заведены."""
     headers = _teacher(client)
-    _secret, codes = _enable_mfa(client, headers)
+    _secret, codes = _enable_mfa(client, headers, TEACHER_PASS)
 
     def login_challenge():
         return client.post("/auth/login",
@@ -280,7 +282,7 @@ def test_admin_with_a_configured_factor_is_not_asked_for_a_code(client, as_produ
 def test_the_factor_is_still_available_to_anyone_who_wants_it(client, as_production):
     """Снят замок, а не дверь: завести фактор по-прежнему можно."""
     headers = make_admin(client)
-    assert client.post("/auth/mfa/setup", headers=headers).status_code == 200
+    assert client.post("/auth/mfa/setup", headers=headers, json={"current": "adminpass1"}).status_code == 200
     assert client.get("/auth/mfa/status", headers=headers).status_code == 200
 
 
@@ -351,7 +353,7 @@ def test_the_allowed_list_is_exactly_enough_to_set_the_factor_up(client, as_prod
     headers = make_admin(client)
     for path in ("/auth/mfa/status", "/me/prefs"):
         assert client.get(path, headers=headers).status_code == 200, path
-    assert client.post("/auth/mfa/setup", headers=headers).status_code == 200
+    assert client.post("/auth/mfa/setup", headers=headers, json={"current": "adminpass1"}).status_code == 200
 
 
 def test_admin_with_a_configured_factor_can_still_reset_his_password(client):
@@ -371,7 +373,7 @@ def test_admin_with_a_configured_factor_can_still_reset_his_password(client):
 
     admin = make_admin(client)
     #Заводим и ПОДТВЕРЖДАЕМ фактор администратору — состояние из жалобы.
-    secret = client.post("/auth/mfa/setup", headers=admin).json()["secret"]
+    secret = client.post("/auth/mfa/setup", headers=admin, json={"current": "adminpass1"}).json()["secret"]
     assert client.post("/auth/mfa/confirm", json={"code": totp.code(secret)},
                        headers=admin).status_code == 200
 
@@ -411,3 +413,69 @@ def test_nobody_is_told_to_set_up_a_factor_while_nobody_is_required_to(client):
     r = client.get("/web/admin/groups", headers=admin)
     assert r.status_code == 200, r.text
     assert r.headers.get("X-Gb-Reason") != "mfa_setup_required"
+
+
+# ── QUEUE п.4 «QR должен быть защищён» (просьба Ярослава 03.09.2026, сделано 21.10.2026) ──
+#Обратный ход (проверен): убрать `_confirm_identity` из `mfa_setup` — краснеет
+#`test_setup_needs_the_current_password`; убрать проверку срока в `mfa_confirm` —
+#`test_an_abandoned_setup_cannot_be_confirmed_later`; убрать шаг `mfa_setups` из уборки
+#или условие на `confirmed_at` — `test_nightly_cleanup_removes_only_abandoned_setups`.
+
+def _backdate_setup(minutes, confirmed_too=False):
+    from datetime import datetime, timedelta, timezone
+    stamp = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime(
+        "%Y-%m-%d %H:%M:%S")
+    with SessionLocal() as db:
+        q = db.query(UserMFA)
+        if not confirmed_too:
+            q = q.filter(UserMFA.confirmed_at == "")
+        for row in q.all():
+            row.created_at = stamp
+        db.commit()
+
+
+def test_setup_needs_the_current_password(client):
+    """🔒 Сидящий за чужой открытой сессией не привяжет фактор к своему телефону."""
+    headers = make_admin(client)
+    r = client.post("/auth/mfa/setup", headers=headers)
+    assert r.status_code == 400 and r.headers.get("X-Gb-Reason") == "password_required"
+    r = client.post("/auth/mfa/setup", headers=headers, json={"current": "чужой-пароль"})
+    assert r.status_code == 400 and "secret" not in r.json()
+    with SessionLocal() as db:
+        assert db.query(UserMFA).count() == 0, "секрет выдан без пароля"
+    r = client.post("/auth/mfa/setup", headers=headers, json={"current": "adminpass1"})
+    assert r.status_code == 200 and r.json()["secret"]
+
+
+def test_an_abandoned_setup_cannot_be_confirmed_later(client):
+    headers = make_admin(client)
+    secret = client.post("/auth/mfa/setup", headers=headers,
+                         json={"current": "adminpass1"}).json()["secret"]
+    from app.routers import mfa as _mfa
+    _backdate_setup(_mfa.SETUP_TTL_MIN + 1)
+    r = client.post("/auth/mfa/confirm", headers=headers, json={"code": totp.code(secret)})
+    assert r.status_code == 400 and "устарела" in r.json()["detail"]
+    with SessionLocal() as db:
+        assert db.query(UserMFA).first().secret == "", "секрет брошенной настройки остался"
+    #Свежая настройка подтверждается как обычно.
+    secret = client.post("/auth/mfa/setup", headers=headers,
+                         json={"current": "adminpass1"}).json()["secret"]
+    assert client.post("/auth/mfa/confirm", headers=headers,
+                       json={"code": totp.code(secret)}).status_code == 200
+
+
+def test_nightly_cleanup_removes_only_abandoned_setups(client):
+    from app import retention
+    from app.routers import mfa as _mfa
+    headers = make_admin(client)
+    _enable_mfa(client, headers)                                   #подтверждённый — вечен
+    teacher = make_teacher(client, headers, login=TEACHER_LOGIN, password=TEACHER_PASS)
+    client.post("/auth/mfa/setup", headers=teacher, json={"current": TEACHER_PASS})
+    #Обе строки «давние»: подтверждённый фактор, заведённый год назад, уборка не трогает
+    #никогда — иначе она выключила бы человеку второй фактор молча.
+    _backdate_setup(_mfa.SETUP_TTL_MIN + 1, confirmed_too=True)    #брошенный — убрать
+    with SessionLocal() as db:
+        report = retention.run_all(db)
+        left = {r.user_id: bool(r.confirmed_at) for r in db.query(UserMFA).all()}
+    assert report.get("mfa_setups") == 1, report
+    assert list(left.values()) == [True], left

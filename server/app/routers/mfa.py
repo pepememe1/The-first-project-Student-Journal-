@@ -73,6 +73,34 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+#🔒 НЕЗАВЕРШЁННАЯ НАСТРОЙКА ЖИВЁТ ПОЛЧАСА (QUEUE п.4, просьба Ярослава 03.09.2026, сделано
+#21.10.2026). До этого начатая и брошенная настройка держала секрет в базе бессрочно, и
+#подтвердить его можно было хоть через полгода — тем, кто тогда увидел QR на экране общего
+#компьютера. Полчаса — с запасом на «поставить аутентификатор из магазина приложений».
+SETUP_TTL_MIN = 30
+
+
+def _setup_cutoff() -> str:
+    """Начатая раньше этой метки настройка устарела. Формат — тот же, что у `_now()`:
+    сравнение строковое и работает ровно потому, что обе стороны печатает одна функция."""
+    return (datetime.now(timezone.utc) - timedelta(minutes=SETUP_TTL_MIN)).strftime(
+        "%Y-%m-%d %H:%M:%S")
+
+
+def purge_stale_setups(db: Session) -> int:
+    """Убрать брошенные настройки (секрет без подтверждения старше `SETUP_TTL_MIN`).
+
+    Зовёт ежедневная уборка (`retention.run_all`). Подтверждённые не трогаются никогда:
+    их снимает только сам человек кодом или администратор с машины (`mfa_admin.py`)."""
+    rows = (db.query(UserMFA)
+            .filter((UserMFA.confirmed_at == "") | (UserMFA.confirmed_at.is_(None)),
+                    (UserMFA.created_at < _setup_cutoff()) | (UserMFA.created_at.is_(None)))
+            .all())
+    for r in rows:
+        db.delete(r)
+    return len(rows)
+
+
 def required_for(user: User) -> bool:
     """Обязателен ли второй фактор этой роли на этом сервере.
 
@@ -230,22 +258,35 @@ def mfa_status(user: User = Depends(get_current_user), db: Session = Depends(get
 
 
 @router.post("/setup")
-def mfa_setup(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def mfa_setup(body: dict = Body(default={}), request: Request = None,
+              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Выдать секрет и строку для аутентификатора. Фактор ЕЩЁ НЕ ДЕЙСТВУЕТ.
 
     ⚠️ Повторный вызов при уже подтверждённом факторе отвергаем: иначе тот, кто
     доберётся до открытой сессии, просто перезаведёт фактор на свой телефон и
     получит постоянный вход. Перезавести можно только через `disable`, а он
     требует действующего кода.
+
+    🔒 НУЖЕН ТЕКУЩИЙ ПАРОЛЬ (21.10.2026, QUEUE п.4; инвариант §4.35 — правка того, на чём
+    держится вход, идёт через `account._confirm_identity`). Без него сидящий за чужой
+    незакрытой сессией привязывал фактор к СВОЕМУ телефону: владелец при следующем входе
+    упирался в код, которого у него нет, и вернуть доступ мог только администратор с
+    машины. Пароль тот, кто подошёл к открытому журналу, не знает.
+    Начало настройки ставит отсчёт её срока (`SETUP_TTL_MIN`): `created_at` у
+    неподтверждённой строки — момент, когда показали ЭТОТ секрет.
     """
     row = row_for(db, user.id)
     if row and row.confirmed_at:
         raise HTTPException(status_code=409,
                             detail="Второй фактор уже настроен. Сначала отключите текущий.")
+    from .account import _confirm_identity
+    _confirm_identity(db, request, user, body, what="настройка второго фактора",
+                      reject_action="mfa.setup.rejected")
     secret = totp.new_secret()
     if row is None:
-        row = UserMFA(user_id=user.id, created_at=_now())
+        row = UserMFA(user_id=user.id)
         db.add(row)
+    row.created_at = _now()
     row.secret = secret
     row.confirmed_at = ""
     row.last_step = 0
@@ -282,6 +323,13 @@ def mfa_confirm(body: dict = Body(...), request: Request = None,
         raise HTTPException(status_code=400, detail="Сначала начните настройку")
     if row.confirmed_at:
         raise HTTPException(status_code=409, detail="Второй фактор уже подтверждён")
+    #Брошенная настройка (см. `SETUP_TTL_MIN`): секрет гасим сразу, а не ждём уборки —
+    #подобрать к нему код больше не получится ни у кого.
+    if not row.created_at or row.created_at < _setup_cutoff():
+        row.secret = ""
+        db.commit()
+        raise HTTPException(status_code=400,
+                            detail="Настройка устарела — начните её заново.")
 
     step = totp.verify(row.secret, str(body.get("code", "")))
     if step is None:
