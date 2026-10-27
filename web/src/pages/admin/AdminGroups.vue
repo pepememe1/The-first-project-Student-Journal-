@@ -13,6 +13,8 @@ import { useToast } from '@/composables/useToast'
 import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
 import { collegeParts } from '@/utils/collegeTime'
+import GbIcon from '@/components/ui/GbIcon.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 
 const toast = useToast()
 const { confirmDelete } = useDeleteConfirm()
@@ -425,7 +427,7 @@ async function importParsed() {
   try {
     const r = (await adminApi.bindSubjects()).data
     if (!r.ok && r.building) {
-      toast.info(locale.t('adminGroups.scheduleIndexBuilding', 'Индекс расписания готовится на сервере (~минута). Нажми «🏫 Из расписания» ещё раз чуть позже.'))
+      toast.info(locale.t('adminGroups.scheduleIndexBuilding', 'Индекс расписания готовится на сервере (~минута). Нажми «Из расписания» ещё раз чуть позже.'))
     } else {
       const suffix = r.building ? locale.t('adminGroups.bindSubjectsBuildingSuffix', ' (индекс ещё дообновляется — можно повторить для полноты)') : ''
       toast.success(locale.t('adminGroups.bindSubjectsDone', { bound: r.bound, subjects: r.subjects }) + suffix)
@@ -479,20 +481,20 @@ async function importParsed() {
           </button>
           <button class="w-full px-3 py-2 text-left text-sm hover:opacity-80"
                   style="color: var(--gb-text)" @click="runAddAction(openScheduleImport)">
-            {{ locale.t('adminGroups.importByCategoryBtn', '🌐 Импорт по категории') }}
+            <GbIcon name="globe" class="mr-1 inline-block size-4 align-[-3px]" />{{ locale.t('adminGroups.importByCategoryBtn', 'Импорт по категории') }}
           </button>
           <!-- Расписание знает, КТО ведёт пару, а у нас эта связь велась руками: смена
                расписания меняла предметы группы и оставляла преподавателя без журнала. -->
           <button class="w-full px-3 py-2 text-left text-sm hover:opacity-80"
                   style="color: var(--gb-text)"
                   @click="runAddAction(() => { showTeacherSuggest = true })">
-            {{ locale.t('adminGroups.teacherSuggestBtn', '👤 Кто ведёт предметы') }}
+            <GbIcon name="findTeacher" class="mr-1 inline-block size-4 align-[-3px]" />{{ locale.t('adminGroups.teacherSuggestBtn', 'Кто ведёт предметы') }}
           </button>
         </div>
       </div>
     </div>
     <!-- Заслонка клика мимо. Прозрачная и БЕЗ затемнения: это меню, а не модалка. -->
-    <div v-if="addMenu" class="fixed inset-0 z-10" @click="addMenu = false"></div>
+    <div v-back-close v-if="addMenu" class="fixed inset-0 z-10" @click="addMenu = false"></div>
 
     <!-- Кнопки-категории (та же идея, что в «Расписании») — фильтр таблицы ниже. -->
     <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
@@ -518,7 +520,7 @@ async function importParsed() {
     </div>
 
     <StickyXScroll class="rounded-lg border border-border bg-card shadow-card">
-      <table class="w-full text-sm">
+      <table class="gb-table-pin w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminGroups.colGroup', 'Группа') }}</th>
@@ -543,11 +545,11 @@ async function importParsed() {
               </div>
             </td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.importEsstuTitle', 'Импорт специальности/плана с сайта ВСГУТУ')" @click="openImport(g)">🎓</button>
-              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.hoursTitle', 'Учебные часы по предметам')" @click="openHours(g)">🕐</button>
-              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.inviteTitle', 'Пригласить студентов ссылкой')" @click="inviteGroup = g.name">✉</button>
-              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminGroups.editBtnTitle', 'Изменить')" @click="openEdit(g)">✎</button>
-              <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(g)">✕</button>
+              <IconButton icon="importPlan" :label="locale.t('adminGroups.importEsstuTitle', 'Импорт специальности/плана с сайта ВСГУТУ')" @click="openImport(g)" />
+              <IconButton icon="hours" :label="locale.t('adminGroups.hoursTitle', 'Учебные часы по предметам')" @click="openHours(g)" />
+              <IconButton icon="invite" :label="locale.t('adminGroups.inviteTitle', 'Пригласить студентов ссылкой')" @click="inviteGroup = g.name" />
+              <IconButton icon="edit" :label="locale.t('adminGroups.editBtnTitle', 'Изменить')" @click="openEdit(g)" />
+              <IconButton icon="delete" tone="danger" :label="locale.t('common.delete')" @click="del(g)" />
             </td>
           </tr>
         </tbody>
@@ -565,7 +567,7 @@ async function importParsed() {
 
         <p v-if="hoursLoading" class="py-6 text-center text-sm text-text3">{{ locale.t('common.loading') }}</p>
         <p v-else-if="!hoursRows.length" class="py-6 text-center text-sm text-text3">
-          {{ locale.t('adminGroups.hoursNoSubjects', 'У группы нет предметов — сначала задайте их кнопкой ✎.') }}
+          {{ locale.t('adminGroups.hoursNoSubjects', 'У группы нет предметов — сначала задайте их кнопкой с карандашом.') }}
         </p>
         <div v-else class="max-h-80 space-y-2 overflow-y-auto">
           <div v-for="r in hoursRows" :key="r.subject"
@@ -600,7 +602,7 @@ async function importParsed() {
                  ВТОРОГО преподавателя (подгруппа 2). Пусто — обе подгруппы у teacher_id. -->
             <template v-if="r.split">
               <div class="mt-1.5 flex items-center gap-1.5 text-[11px] text-accent">
-                <span>👥</span><span>{{ locale.t('adminGroups.splitBadge', 'раздельное обучение') }}</span>
+                <GbIcon name="group" class="size-3.5 shrink-0" /><span>{{ locale.t('adminGroups.splitBadge', 'раздельное обучение') }}</span>
               </div>
               <select v-model="r.teacher_id_2"
                       class="mt-1 h-8 w-full rounded-sm border border-border2 bg-card2 px-2 text-xs text-text2 outline-none focus:border-accent">
@@ -666,7 +668,7 @@ async function importParsed() {
             <Badge v-for="s in importResult.imported" :key="s" variant="green">{{ s }}</Badge>
           </div>
           <template v-if="importResult.unmapped.length">
-            <p class="pt-1 text-text2">{{ locale.t('adminGroups.importResultUnmappedText', 'Добавлены без часов (не удалось определить семестр в плане — задайте часы вручную кнопкой 🕐):') }}</p>
+            <p class="pt-1 text-text2">{{ locale.t('adminGroups.importResultUnmappedText', 'Добавлены без часов (не удалось определить семестр в плане — задайте часы вручную кнопкой с часами):') }}</p>
             <div class="flex flex-wrap gap-1.5">
               <Badge v-for="s in importResult.unmapped" :key="s" variant="muted">{{ s }}</Badge>
             </div>

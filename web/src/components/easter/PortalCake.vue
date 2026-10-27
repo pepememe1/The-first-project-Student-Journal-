@@ -34,7 +34,7 @@ async function blow() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[93] grid place-items-center p-4" style="background:var(--gb-overlay)"
+  <div v-back-close class="fixed inset-0 z-[93] grid place-items-center p-4" style="background:var(--gb-overlay)"
        @click.self="emit('close')">
 
     <!-- До: поздравление. Свечу можно задуть — и тогда всё меняется. -->

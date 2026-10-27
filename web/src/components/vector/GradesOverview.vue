@@ -31,6 +31,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { useLocaleStore } from '@/stores/locale'
 import { categoricalColor } from '@/theme/dataviz'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
 const auth = useAuthStore()
@@ -167,7 +168,7 @@ function barStyle(s, i) {
              проверяет сервер и отдаёт null ниже него). Здесь короткая плашка; подробный
              разбор с причинами и советом человек видит в «Умном совете» на главной. -->
         <div v-if="risk" class="mb-4 rounded-lg border p-3" :class="RISK_STYLE[risk.level] || RISK_STYLE.low">
-          <p class="text-xs font-bold">🎓 {{ locale.t('gradesOverview.riskTitle', { level: risk.level_label }) }}</p>
+          <p class="flex items-center gap-1 text-xs font-bold"><GbIcon name="risk" class="size-3.5 shrink-0" />{{ locale.t('gradesOverview.riskTitle', { level: risk.level_label }) }}</p>
           <p v-if="risk.subjects?.length" class="mt-1 text-xs text-text2">
             {{ risk.subjects.map((s) => s.subject).join(', ') }}
           </p>

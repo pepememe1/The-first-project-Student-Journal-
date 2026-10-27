@@ -279,6 +279,90 @@ def _quiet_remove(path: str) -> None:
             pass
 
 
+def opens(path: str, key: str = "", plain_migrates: bool = True) -> bool:
+    """Открывается ли файл тем же способом, каким его откроет `connect` с этим ключом.
+
+    Открытый SQLite `connect` берёт без ключа (его ещё зашифрует миграция), без драйвера
+    и с негодным ключом — обычным sqlite3. Здесь так же: иначе вердикт разойдётся с тем,
+    что увидит запуск. `plain_migrates=False` — для копии локального сервера: серверный
+    пакет открытый файл с ключом не мигрирует, а падает на нём."""
+    from data import device_key
+    if key and ((plain_migrates and is_plaintext(path)) or not device_key.is_valid(key)):
+        key = ""
+    try:
+        drv = sqlite3
+        if key:
+            try:
+                import sqlcipher3 as drv
+            except Exception:                       # noqa: BLE001
+                key = ""
+        con = drv.connect(path)
+        try:
+            cur = con.cursor()
+            if key:
+                cur.execute("PRAGMA key = \"x'%s'\"" % key)
+            cur.execute("PRAGMA schema_version")    #дешёвое чтение заголовка
+            cur.fetchone()
+            return True
+        finally:
+            con.close()
+    except Exception as e:                          # noqa: BLE001
+        #Чужой ключ SQLCipher называет и «hmac check failed», и MemoryError. Строкой, а не
+        #объектом: запись журнала держала бы исключение, а с ним кадр с соединением, и
+        #Windows не дала бы переименовать файл.
+        _LOG.info("[local-db] файл не открывается (%s)", str(e))
+        return False
+
+
+def set_aside_unreadable(path: str, key: str = "", plain_migrates: bool = True) -> list:
+    """Убрать в сторону базу, которую нечем открыть, и дать завести новую.
+
+    Бывает так: файл ключа устройства пропал (папку скопировали без него, её почистили),
+    программа заводит новый ключ, а прежняя база им не открывается — запуск падал на
+    первом же запросе. Или копию зашифровали, а запустили без драйвера. Истина живёт на
+    сервере, поэтому начать заново можно; а файл ПЕРЕИМЕНОВЫВАЕМ, не удаляем: в нём могут
+    лежать правки, не уехавшие на сервер, и вернуть их из `*.unreadable-*` можно, вместе
+    с найденным ключом. Спутники -wal/-shm уходят вместе с ним, иначе испортят новый файл.
+
+    Возвращает имена унесённых файлов ([] — трогать было нечего или нельзя)."""
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return []
+    if opens(path, key, plain_migrates):
+        return []
+    import college_clock
+    stamp = college_clock.stamp("%Y%m%d_%H%M%S")
+    present = [path + s for s in ("", "-wal", "-shm") if os.path.exists(path + s)]
+    #Всё или ничего: занятый файл значит, что базу держит другой экземпляр программы, и
+    #вердикт «нечитаема» ненадёжен; а унести основной файл без его -wal — собрать копию,
+    #которую не откроет и следующий запуск.
+    for src in present:
+        try:
+            with open(src, "ab"):
+                pass                    #проверка «файл не занят», без изменения содержимого
+        except OSError as e:
+            _LOG.warning("[local-db] базу держит другой процесс — не трогаем её (%s)", e)
+            return []
+    moved = []
+    for src in present:
+        try:
+            os.replace(src, f"{src}.unreadable-{stamp}")
+            moved.append(os.path.basename(src))
+        except OSError as e:
+            #Успели унести часть — возвращаем обратно, чтобы не оставить половину.
+            folder = os.path.dirname(path)
+            for done in moved:
+                try:
+                    os.replace(os.path.join(folder, f"{done}.unreadable-{stamp}"),
+                               os.path.join(folder, done))
+                except OSError:
+                    pass
+            _LOG.warning("[local-db] не удалось убрать нечитаемую базу %s: %s", src, e)
+            return []
+    _LOG.warning("[local-db] база нечитаема этим ключом — начинаем заново (старая "
+                 "сохранена как *.unreadable-%s): %s", stamp, ", ".join(moved))
+    return moved
+
+
 def read_owner(path: str, key: str):
     """Отпечаток владельца базы: '' — базы нет или метки нет, None — ПРОЧИТАТЬ НЕ УДАЛОСЬ.
 

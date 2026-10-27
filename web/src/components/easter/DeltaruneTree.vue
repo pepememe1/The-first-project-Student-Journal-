@@ -150,7 +150,7 @@ async function leave() {
 <template>
   <!-- ⚠️ Кнопки «закрыть на весь экран» здесь НЕТ и быть не должно: именно она уносила
        находку одним промахом. Кликабельны только дерево, окно диалога и проход внизу. -->
-  <div class="soul fixed inset-0 z-[95] grid place-items-center overflow-hidden bg-black
+  <div v-back-close="() => emit('close')" class="soul fixed inset-0 z-[95] grid place-items-center overflow-hidden bg-black
               transition-opacity duration-500"
        :style="{ opacity: shown ? 1 : 0 }">
 

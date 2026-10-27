@@ -1,0 +1,3 @@
+# Хуки git исполняет sh: с концами строк CRLF (core.autocrlf=true на Windows) скрипт
+# падает на первой же строке, и проверка молча перестаёт работать.
+tools/git-hooks/* text eol=lf

@@ -3,7 +3,7 @@
 // Скоуп считает сервер: студент видит свою группу, преподаватель — свои, админ — все.
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { BookOpen, Search, Plus, Paperclip, ClipboardList, Archive, Loader2, X } from '@lucide/vue'
+import { BookOpen, Search, Plus, Paperclip, ClipboardList, Archive, LoaderCircle, X } from '@lucide/vue'
 import { coursesApi, teacherApi, adminApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
@@ -103,7 +103,7 @@ async function submitCreate() {
     </div>
 
     <div v-if="loading" class="grid place-items-center py-16 text-text3">
-      <Loader2 class="size-6 animate-spin" />
+      <LoaderCircle class="size-6 animate-spin" />
     </div>
 
     <div v-else-if="!courses.length" class="grid place-items-center gap-2 py-16 text-center text-text3">
@@ -184,7 +184,7 @@ async function submitCreate() {
                     class="rounded-md border border-border2 px-3 py-2 text-sm text-text2 hover:border-accent">{{ t('common.cancel', 'Отмена') }}</button>
             <button type="button" @click="submitCreate" :disabled="!draft.title.trim() || creating"
                     class="flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-              <Loader2 v-if="creating" class="size-4 animate-spin" />{{ t('courses.create', 'Создать курс') }}
+              <LoaderCircle v-if="creating" class="size-4 animate-spin" />{{ t('courses.create', 'Создать курс') }}
             </button>
           </div>
         </div>

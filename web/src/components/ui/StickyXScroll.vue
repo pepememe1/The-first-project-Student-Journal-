@@ -30,6 +30,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { isHandheld } from '@/utils/device'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const body = ref(null)      //настоящий контейнер с таблицей
 const bar = ref(null)       //липкая полоса-дублёр
@@ -110,7 +111,7 @@ defineExpose({ measure })
 <template>
   <div class="gb-sticky-x">
     <p v-if="hintVisible()" class="mb-1 flex items-center gap-1.5 px-2 text-xs text-text3">
-      <span aria-hidden="true">↔</span>
+      <GbIcon name="scrollX" class="size-3.5 shrink-0" />
       {{ locale.t('table.swipeHint', 'Таблица шире экрана — листайте вбок') }}
     </p>
     <div ref="body" class="gb-sticky-x__body overflow-x-auto" @scroll="fromBody">

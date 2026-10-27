@@ -14,6 +14,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { meApi } from '@/api/endpoints'
 import { ACHIEVEMENTS, RARITY } from '@/config/achievements'
 import { formatCollege } from '@/utils/collegeTime'
+import AchievementBadge from '@/components/ui/AchievementBadge.vue'
 
 const emit = defineEmits(['close'])
 const locale = useLocaleStore()
@@ -104,10 +105,9 @@ function fmt(iso) {
                :class="isOpen(a.id)
                  ? 'border-border2 bg-card2'
                  : 'border-border2 bg-[#05070a] text-text3'">
-            <span class="grid size-10 shrink-0 place-items-center rounded-lg text-xl"
-                  :class="isOpen(a.id) ? 'bg-accent-glow' : 'bg-black/60'">
-              <template v-if="isOpen(a.id)">{{ a.icon }}</template>
-              <Lock v-else class="size-4 text-text3/50" />
+            <AchievementBadge v-if="isOpen(a.id)" :icon="a.icon" :rarity="a.rarity" :size="40" />
+            <span v-else class="grid size-10 shrink-0 place-items-center rounded-lg bg-black/60">
+              <Lock class="size-4 text-text3/50" />
             </span>
             <div class="min-w-0">
               <p class="truncate text-sm font-semibold"
@@ -134,7 +134,7 @@ function fmt(iso) {
                     :aria-pressed="picked.has(a.id)"
                     class="flex items-center gap-3 rounded-lg border p-3 text-left transition-colors"
                     :class="picked.has(a.id) ? 'border-accent bg-accent-glow' : 'border-border2 bg-card2 hover:border-border'">
-              <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-card text-lg">{{ a.icon }}</span>
+              <AchievementBadge :icon="a.icon" :rarity="a.rarity" :size="36" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-sm font-semibold text-text">{{ a.title }}</span>
                 <span class="block text-[11px]" :style="{ color: RARITY[a.rarity].color }">
@@ -163,7 +163,7 @@ function fmt(iso) {
           </button>
         </template>
         <template v-else>
-          <button type="button" @click="mode = 'all'"
+          <button v-back-close type="button" @click="mode = 'all'"
                   class="rounded-lg border border-border2 px-3.5 py-2 text-sm font-medium text-text2 hover:border-accent hover:text-text">
             {{ locale.t('common.back', 'Назад') }}
           </button>

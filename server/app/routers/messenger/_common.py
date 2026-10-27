@@ -543,7 +543,7 @@ def _require_report_quota(db: Session, reporter_id: str) -> None:
     if _report_quota_left(db, reporter_id) <= 0:
         raise HTTPException(status_code=429,
                             detail="Слишком много жалоб за сутки. Если случай срочный — "
-                                   "напишите в обращения модерации (⚙).")
+                                   "напишите в обращения модерации (шестерёнка у чата).")
 
 
 def _muted_set(db: Session, user_ids) -> set:

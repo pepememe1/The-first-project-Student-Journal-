@@ -51,7 +51,7 @@ async function onClick() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[93]" @click="onClick">
+  <div v-back-close="() => emit('close')" class="fixed inset-0 z-[93]" @click="onClick">
     <div class="absolute inset-0 transition-opacity duration-300"
          style="background:linear-gradient(120deg,#ffdf3d55,#ff2fb955);mix-blend-mode:hard-light"
          :style="{ opacity: filter }"></div>

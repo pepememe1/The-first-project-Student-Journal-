@@ -16,23 +16,65 @@
  * Ошибка загрузки показывается явно. Иначе неудачная гифка навсегда остаётся чёрным
  * прямоугольником, неотличимым от «ещё грузится», и человек ждёт того, что не придёт.
  */
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { useLocaleStore } from '@/stores/locale'
-import { mediaSrc } from '@/utils/mediaSrc'
+import { gifPosterSrc, gifVideoSrc, mediaSrc, playMuted, watchInView } from '@/utils/mediaSrc'
 
-defineProps({
+const props = defineProps({
   src: { type: String, required: true },
   alt: { type: String, default: 'GIF' },
 })
 
 const locale = useLocaleStore()
 const state = ref('loading') // loading | ok | error
+//Роликом MP4, а не GIF: тот же ролик в десятки раз легче (utils/mediaSrc.js::gifVideoSrc).
+//Ролик не открылся — показываем прежнюю картинку, а не ошибку.
+//Сначала первый кадр, ролик — когда до гифки долистали; вне экрана он на паузе.
+const video = computed(() => gifVideoSrc(props.src))
+const poster = computed(() => gifPosterSrc(props.src))
+const videoFailed = ref(false)
+const box = ref(null)
+const videoEl = ref(null)
+const seen = ref(false)
+let unwatch = () => {}
+onMounted(() => {
+  unwatch = watchInView(box.value, (visible) => {
+    if (visible) seen.value = true
+    const v = videoEl.value
+    if (!v) return
+    if (visible) v.play?.()?.catch?.(() => {})
+    else v.pause?.()
+  })
+})
+onBeforeUnmount(() => unwatch())
 </script>
 
 <template>
-  <span class="gb-gif" :class="'gb-gif--' + state">
+  <span ref="box" class="gb-gif" :class="'gb-gif--' + state">
     <img
+      v-if="video && !videoFailed && !seen"
+      :src="poster"
+      :alt="alt"
+      decoding="async"
+      class="gb-gif__img max-h-64 max-w-full rounded-lg"
+      @load="state = 'ok'"
+    />
+    <video
+      v-else-if="video && !videoFailed"
+      ref="videoEl"
+      :src="video"
+      :poster="poster"
+      :aria-label="alt"
+      autoplay muted loop playsinline disablepictureinpicture
+      preload="auto"
+      class="gb-gif__img max-h-64 max-w-full rounded-lg"
+      @loadeddata="state = 'ok'"
+      @canplay="playMuted"
+      @error="videoFailed = true"
+    />
+    <img
+      v-else
       :src="mediaSrc(src)"
       :alt="alt"
       decoding="async"

@@ -18,8 +18,8 @@
 // замечает всегда.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
-  Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag, AlarmClock, Languages,
-  Volume2, SmilePlus, MoreHorizontal, Quote, Link2, Pencil,
+  Reply, Pin, PinOff, Copy, Forward, Trash2, ListChecks, Flag, AlarmClock, Languages, Volume2,
+  SmilePlus, EllipsisVertical, Quote, Link2, Pencil,
 } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 import { menuMaxHeight, placeMenu } from '@/utils/menuPlacement'
@@ -127,7 +127,7 @@ const style = computed(() => ({
 
 <template>
   <!-- Полупрозрачная подложка: клик мимо — закрыть -->
-  <div class="fixed inset-0 z-40" @click="emit('close')" @contextmenu.prevent="emit('close')">
+  <div v-back-close class="fixed inset-0 z-40" @click="emit('close')" @contextmenu.prevent="emit('close')">
     <div ref="box"
          class="fixed z-50 w-60 overflow-y-auto overflow-x-hidden rounded-xl border border-border2 bg-card py-1 shadow-card transition-opacity"
          :class="pos ? 'opacity-100' : 'opacity-0'"
@@ -140,7 +140,7 @@ const style = computed(() => ({
            class="flex flex-wrap justify-center gap-0.5 border-b border-border px-1.5 py-1.5">
         <button v-for="e in REACTIONS" :key="e" type="button"
                 @click="emit('react', e); emit('close')"
-                class="grid size-7 place-items-center rounded-md text-base transition-colors hover:bg-bg2">
+                class="grid size-7 place-items-center rounded-md text-base transition-colors hover:bg-bg2 pointer-coarse:size-10 pointer-coarse:text-xl">
           {{ e }}
         </button>
       </div>
@@ -162,7 +162,7 @@ const style = computed(() => ({
       <template v-if="more.length">
         <button v-if="!showMore" type="button" @click.stop="showMore = true"
                 class="flex w-full items-center gap-3 border-t border-border px-3.5 py-2 text-left text-sm text-text3 transition-colors hover:bg-bg2">
-          <MoreHorizontal class="size-4 shrink-0" />
+          <EllipsisVertical class="size-4 shrink-0" />
           {{ locale.t('msgAction.more', 'Ещё') }}
         </button>
         <div v-else class="border-t border-border">

@@ -13,7 +13,7 @@
 // клиенте, чтобы не предлагать заведомо неработающее действие.
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { MessageSquareWarning, X, Check, Loader2 } from '@lucide/vue'
+import { MessageSquareWarning, X, Check, LoaderCircle } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { useMessengerStore } from '@/stores/messenger'
 import { useLocaleStore } from '@/stores/locale'
@@ -73,7 +73,7 @@ async function openChat() {
 
     <!-- Модалка -->
     <transition name="fade">
-      <div v-if="open" class="fixed inset-0 z-[70] grid place-items-center p-4"
+      <div v-back-close v-if="open" class="fixed inset-0 z-[70] grid place-items-center p-4"
            style="background: var(--gb-overlay)" @click.self="close()">
         <div class="w-full max-w-md rounded-xl border border-border2 bg-card p-4 shadow-card">
           <div class="mb-2 flex items-center gap-2">
@@ -122,7 +122,7 @@ async function openChat() {
               </button>
               <button type="button" @click="submit()" :disabled="!text.trim() || busy"
                       class="flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-                <Loader2 v-if="busy" class="size-4 animate-spin" />
+                <LoaderCircle v-if="busy" class="size-4 animate-spin" />
                 {{ t('report.send', 'Отправить') }}
               </button>
             </div>

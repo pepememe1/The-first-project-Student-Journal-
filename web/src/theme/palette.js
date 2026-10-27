@@ -22,10 +22,12 @@ export const NEUTRALS_LIGHT = {
   border2: '#D3DBE1',
   text: '#0F1B22',
   text3: '#46555F',
-  text2: '#7A8893',
-  red: '#D14343',
-  orange: '#D9892B',
-  yellow: '#C99A0C',
+  // Цвета текста ниже подобраны под контраст WCAG 4.5 на всех светлых поверхностях
+  // (аудит 27.10.2026: серый подписей давал 3.2–3.6, янтарь среднего — 2.8, жёлтый — 2.6).
+  text2: '#636E77',
+  red: '#C03E3E',
+  orange: '#98601E',
+  yellow: '#876708',
   shadow: 'rgba(15,27,34,0.10)',
   overlay: 'rgba(15,27,34,0.40)',
 }
@@ -40,7 +42,7 @@ export const NEUTRALS_DARK = {
   border2: '#333A40',
   text: '#ECEEF0',
   text3: '#AEB8BF',
-  text2: '#7E8A92',
+  text2: '#8F99A0',   // контраст 4.5 и на втором уровне карточек (аудит 27.10.2026)
   red: '#F2776B',
   orange: '#F0A95A',
   yellow: '#E3C152',
@@ -210,6 +212,38 @@ function darkTintedSurfaces(accent) {
   }
 }
 
+// Яркость по WCAG и контраст двух цветов.
+function luminance(hex) {
+  const { r, g, b } = hexToRgb(hex)
+  const lin = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+export function contrast(a, b) {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p)
+  return (x + 0.05) / (y + 0.05)
+}
+
+/**
+ * Акцент для ТЕКСТА: тот же оттенок, сдвинутый к белому (тёмный режим) или к чёрному
+ * (светлый), пока не наберёт контраст 4.5 на каждой поверхности. Заливки кнопок остаются
+ * чистым акцентом. Без этого бирюза в тёмной теме давала 3.3, а «Тёмно-синий» — 1.9
+ * (аудит 27.10.2026): активный пункт меню и ссылки едва читались.
+ */
+export function readableAccent(accent, surfaces, mode) {
+  const target = mode === 'dark' ? '#ffffff' : '#000000'
+  for (let k = 0; k <= 100; k += 2) {
+    const c = mix(accent, target, k / 100)
+    if (surfaces.every((s) => contrast(c, s) >= 4.6)) return c
+  }
+  return target
+}
+
+function withAccentText(cols, mode) {
+  cols.accent_text = readableAccent(cols.green, [cols.bg, cols.bg2, cols.card, cols.card2], mode)
+  return { ...cols, mode }
+}
+
 // РЕЖИМ С УЧЁТОМ РАСПИСАНИЯ ────────────────────────────────────────────────────
 function normHHMM(v, def) {
   try {
@@ -275,21 +309,21 @@ export function buildPalette(spec) {
     const accent = spec.accent || DEFAULT_ACCENT.green
     Object.assign(cols, accentSlots(accent, spec.accent2))
     Object.assign(cols, surfaces(accent))
-    return { ...cols, mode }
+    return withAccentText(cols, mode)
   }
   if (tid === DEFAULT_ID) {
     Object.assign(cols, DEFAULT_ACCENT)
     Object.assign(cols, surfaces(DEFAULT_ACCENT.green))
-    return { ...cols, mode }
+    return withAccentText(cols, mode)
   }
   const preset = PRESET_BY_ID[tid]
   if (!preset) {
     Object.assign(cols, DEFAULT_ACCENT) // неизвестный id — безопасный откат
-    return { ...cols, mode }
+    return withAccentText(cols, mode)
   }
   Object.assign(cols, accentSlots(preset.accent, preset.accent2))
   Object.assign(cols, surfaces(preset.accent))
-  return { ...cols, mode }
+  return withAccentText(cols, mode)
 }
 
 /** (accent, accent2, surface) — три цвета для кружка-превью палитры. */

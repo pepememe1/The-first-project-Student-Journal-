@@ -144,7 +144,7 @@ const statusColor = computed(() => sharedStatusColor(activePeer.value?.status_ki
       </div>
       <div class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
         <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.notHere', 'Лучше не сюда') }}</p>
-        {{ locale.t('profilePanel.notHereText', 'Жалобы на пользователей — через «Модерация» (кнопка ⚙ у любого чата, её видят все, в том числе можно пожаловаться на действия самого администратора). Учебные вопросы (оценки, расписание) — своему куратору или преподавателю.') }}
+        {{ locale.t('profilePanel.notHereText', 'Жалобы на пользователей — через «Модерация» (шестерёнка у любого чата, её видят все, в том числе можно пожаловаться на действия самого администратора). Учебные вопросы (оценки, расписание) — своему куратору или преподавателю.') }}
       </div>
     </div>
 

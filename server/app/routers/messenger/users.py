@@ -53,6 +53,14 @@ def directory(role: str = Query("student"), q: str = Query(""), page: int = Quer
         groups_by_id = {u.id: sorted(_parent_group_names(db, u)) for u in chunk}
         for d in out:
             d["groups"] = groups_by_id.get(d["id"], [])
+    elif role == "student":
+        #Тёзки в разных группах в списке выбора были неразличимы: два «Иванов Иван
+        #Сергеевич» без подписи (живой прогон 27.10.2026). Группа студента и так видна
+        #в его карточке; сюда — только название группы.
+        group_by_id = {u.id: u.group_name for u in chunk}
+        for d in out:
+            g = group_by_id.get(d["id"])
+            d["groups"] = [g] if g else []
     return {"users": out, "total": total, "page": page, "page_size": _PAGE_USERS}
 
 

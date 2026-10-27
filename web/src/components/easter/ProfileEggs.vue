@@ -108,7 +108,7 @@ defineExpose({ start })
        появлялся вовсе — подтверждение при уходе честно говорило «на экране пасхалка»,
        а на экране было пусто.
        ⚠️ Любой новый плавающий слой пасхалки — только через <Teleport to="body">. -->
-    <div v-if="box" class="gb-utbox pointer-events-auto fixed inset-x-4 bottom-4 z-[92] mx-auto max-w-3xl
+    <div v-if="box" class="gb-utbox pointer-events-auto fixed inset-x-4 bottom-[calc(1rem+var(--gb-bottom-chrome))] z-[92] mx-auto max-w-3xl
                            cursor-pointer border-[3px] border-white bg-black px-5 py-4"
          role="dialog" @click="advance">
       <template v-if="box === 'lines'">

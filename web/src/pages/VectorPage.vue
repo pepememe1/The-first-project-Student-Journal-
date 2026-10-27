@@ -169,12 +169,16 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
         </div>
       </transition>
 
-      <form class="mx-auto flex max-w-3xl items-center gap-2" @submit.prevent="send">
-        <button type="button" @click="showQuick = !showQuick" :aria-label="locale.t('vectorPage.quickCommands', 'Быстрые команды')"
-                class="grid size-11 shrink-0 place-items-center rounded-sm border transition-colors"
+      <!-- Подписью, а не одним значком сетки: что за ней, без слова не понять (живой прогон
+           23.10.2026), а у поля ввода на телефоне так остаётся больше места. -->
+      <div v-if="cmds.length" class="mx-auto mb-2 flex max-w-3xl">
+        <button type="button" @click="showQuick = !showQuick" :aria-expanded="showQuick"
+                class="inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-sm font-medium transition-colors pointer-coarse:min-h-11"
                 :class="showQuick ? 'border-accent bg-accent-glow text-accent' : 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'">
-          <LayoutGrid class="size-5" />
+          <LayoutGrid class="size-4" aria-hidden="true" />{{ locale.t('vectorPage.quickCommands', 'Быстрые команды') }}
         </button>
+      </div>
+      <form class="mx-auto flex max-w-3xl items-center gap-2" @submit.prevent="send">
         <MicButton @text="onVoiceText" @error="onVoiceError" />
         <input v-model="input" :placeholder="locale.t('vectorPage.askPlaceholder', { name: vectorName() })"
                @focus="showQuick = false; focused = true" @blur="focused = false"

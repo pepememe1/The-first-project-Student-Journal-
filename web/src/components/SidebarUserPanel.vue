@@ -93,15 +93,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('offline', updateOnline)
 })
 
-onMounted(async () => {
+onMounted(() => {
   window.addEventListener('online', updateOnline)
   window.addEventListener('offline', updateOnline)
-  profile.load()
-  await messenger.loadMyStatus()
-  //Авто-«отошёл» по бездействию (как в Discord). Запускаем ЗДЕСЬ, а не на странице
-  //мессенджера: панель видна на всех страницах, а отлучиться можно и из журнала —
-  //привяжи слежение к одной вкладке, и статус завис бы на «в сети» у всех остальных.
-  messenger.startIdleWatch()
+  //Профиль, свой статус и авто-«отошёл» загружает оболочка (AppShell.vue): на телефоне
+  //эта карточка живёт только в открытой шторке, и до неё ничего из этого не приезжало.
 })
 </script>
 
@@ -110,7 +106,7 @@ onMounted(async () => {
     <!-- Карточка себя раскрывается ВВЕРХ: панель прижата к нижнему краю окна. -->
     <SidebarUserOverlay v-if="cardOpen" @close="cardOpen = false" />
     <!-- Клик мимо карточки закрывает её (глобальной директивы click-outside в проекте нет). -->
-    <div v-if="cardOpen" class="fixed inset-0 z-30" @click="cardOpen = false" />
+    <div v-back-close v-if="cardOpen" class="fixed inset-0 z-30" @click="cardOpen = false" />
 
     <div class="relative z-10 flex items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-bg">
       <!-- ⚠️ В самой панели — ТОЛЬКО самое частое: аватар, имя, логин и точка статуса.
@@ -149,7 +145,7 @@ onMounted(async () => {
       </button>
 
       <button type="button" @click="theme.toggleMode()"
-              class="grid size-8 shrink-0 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-accent"
+              class="grid size-8 shrink-0 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-accent pointer-coarse:size-11"
               :aria-label="theme.isDark ? locale.t('header.lightTheme', 'Светлая тема') : locale.t('header.darkTheme', 'Тёмная тема')">
         <Sun v-if="theme.isDark" class="size-4" />
         <Moon v-else class="size-4" />
@@ -166,7 +162,7 @@ onMounted(async () => {
            ⚠️ Пункт «Настройки» из меню при этом УБРАН: две двери в одно место, видимые
            одновременно, читаются как два разных места. -->
       <RouterLink :to="`/${auth.role || 'student'}/settings`"
-                  class="grid size-8 shrink-0 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-accent"
+                  class="grid size-8 shrink-0 place-items-center rounded-md text-text3 transition-colors hover:bg-bg2 hover:text-accent pointer-coarse:size-11"
                   :aria-label="locale.t('nav.settings', 'Настройки')"
                   :title="locale.t('nav.settings', 'Настройки')">
         <SlidersHorizontal class="size-4" />
@@ -176,7 +172,7 @@ onMounted(async () => {
     <!-- Нет связи — единственное состояние сети, о котором стоит сообщать. -->
     <p v-if="!online" class="mt-1 px-1.5 text-[11px] font-semibold text-red"
        :title="locale.t('header.offlineHint', 'Нет связи с сетью — данные подтянутся, когда связь вернётся.')">
-      ● {{ locale.t('header.offline', 'Офлайн') }}
+      <span class="mr-1 inline-block size-1.5 rounded-full bg-current align-middle" aria-hidden="true"></span>{{ locale.t('header.offline', 'Офлайн') }}
     </p>
   </div>
 </template>

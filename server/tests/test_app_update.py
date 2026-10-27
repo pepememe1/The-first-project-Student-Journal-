@@ -161,3 +161,43 @@ def test_signature_from_the_manifest_reaches_the_phone(client, tmp_path, monkeyp
     (tmp_path / "latest.json").write_text(json.dumps(data), encoding="utf-8")
     body = client.get("/app/updates").json()
     assert body["version"] == version and body["sig"] == "U0lH"
+
+
+def test_signed_file_list_reaches_the_phone_and_matches_what_is_served(client, tmp_path,
+                                                                       monkeypatch):
+    """Пофайловое обновление (23.10.2026): выпуск подписывает отпечаток списка файлов
+    (`tools/sign_ota.py`), сервер отдаёт список и подпись. Сквозная проверка: отпечаток,
+    посчитанный из ОТДАННОГО списка, обязан сойтись с подписью выпуска — иначе телефоны
+    молча вернутся к закачке архива целиком.
+
+    Обратный ход: уберите проброс `files_sig` в `/app/updates` — краснеет."""
+    import base64
+    import os
+    import sys
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    import ota_files
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "tools"))
+    import sign_ota
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = tmp_path / "k.pem"
+    pem.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                      serialization.PrivateFormat.PKCS8,
+                                      serialization.NoEncryption()))
+    spki = base64.b64encode(key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+    monkeypatch.setattr(sign_ota, "PRIVATE_KEY", str(pem))
+    monkeypatch.setattr(sign_ota, "public_keys", lambda: [spki])
+    monkeypatch.setattr(appupdate, "OTA_DIR", tmp_path)
+    version = _make_bundle(tmp_path)
+    assert sign_ota.main(["sign_ota.py", "sign", str(tmp_path / "latest.json")]) == 0
+
+    body = client.get("/app/updates").json()
+    assert body["version"] == version and body.get("files_sig")
+    digest = ota_files.files_digest((f["file_name"], f["file_hash"]) for f in body["manifest"])
+    assert sign_ota.verify_payload(sign_ota.ota_files_payload(version, body["checksum"], digest),
+                                   body["files_sig"], [spki])

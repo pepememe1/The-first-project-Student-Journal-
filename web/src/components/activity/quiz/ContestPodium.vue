@@ -6,6 +6,7 @@
 // список нужен — но потом, чтобы найти себя.
 import { ref, computed } from 'vue'
 import { useLocaleStore } from '@/stores/locale'
+import GbMedal from '@/components/ui/GbMedal.vue'
 
 const props = defineProps({ results: { type: Array, default: () => [] } })
 const locale = useLocaleStore()
@@ -22,7 +23,6 @@ const podium = computed(() => {
     { r: c, place: 3, h: 'h-14' },
   ].filter((x) => x.r)
 })
-const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' }
 </script>
 
 <template>
@@ -34,7 +34,7 @@ const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' }
     <!-- Пьедестал -->
     <div v-if="podium.length" class="flex w-full max-w-md items-end justify-center gap-2">
       <div v-for="p in podium" :key="p.place" class="flex min-w-0 flex-1 flex-col items-center gap-1">
-        <span class="text-2xl">{{ MEDAL[p.place] }}</span>
+        <GbMedal :place="p.place" class="size-8" />
         <span class="w-full truncate text-center text-sm font-semibold text-text">{{ p.r.name }}</span>
         <span class="text-xs tabular-nums text-accent">{{ p.r.score }}</span>
         <!-- Подставка: первое место выше остальных — место читается по высоте, а не
@@ -60,7 +60,7 @@ const MEDAL = { 1: '🥇', 2: '🥈', 3: '🥉' }
            :class="r.place <= 3 ? 'bg-accent/10 ring-1 ring-accent/40' : 'bg-bg2'">
         <span class="w-7 shrink-0 text-center text-sm font-bold"
               :class="r.place <= 3 ? 'text-accent' : 'text-text3'">
-          {{ MEDAL[r.place] || r.place }}
+          <GbMedal v-if="r.place <= 3" :place="r.place" class="inline-block size-5" /><template v-else>{{ r.place }}</template>
         </span>
         <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.name }}</span>
         <!-- «Выполнено» считает ОТВЕТИВШИХ: неверный ответ — тоже работа, а вот

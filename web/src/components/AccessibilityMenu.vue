@@ -39,6 +39,9 @@ const menuEl = ref(null)
 // открытии и ЗАЖИМАЮТСЯ границами окна. `fixed`, а не `absolute` — иначе прижатие к
 // окну невозможно в принципе, координаты считались бы от родителя.
 const MENU_W = 250
+//Ширина растёт вместе с выбранным шрифтом: на «Максимуме» подписи самой панели
+//обрезались в «Версия для сл…», «Высокий к…» (живой прогон 23.10.2026).
+const menuW = computed(() => Math.round(MENU_W * a11y.scaleFactor))
 const pos = ref({ left: 0, top: 0 })
 
 // 🔥 ЗДЕСЬ СТОЯЛ КОММЕНТАРИЙ «вылезло за край — прижимаем», А ПРИЖИМАЛАСЬ ТОЛЬКО
@@ -59,7 +62,7 @@ function place() {
   //Высота ещё не известна (первый кадр) — ставим по-старому и переставим следующим
   //тиком: мигание на кадр незаметно, прыжок готового меню — заметен.
   const r = placeAnchored({
-    anchor, w: MENU_W, h, vw: window.innerWidth, vh: window.innerHeight,
+    anchor, w: menuW.value, h, vw: window.innerWidth, vh: window.innerHeight,
     prefer: props.placement === 'up' ? 'up' : 'down',
   })
   //`up` в состоянии больше не хранится: разворот учтён в самом `top`, а лишнее поле
@@ -107,7 +110,7 @@ onBeforeUnmount(() => {
             :aria-label="t('a11y.title', 'Версия для слабовидящих')"
             :title="t('a11y.title', 'Версия для слабовидящих')"
             :aria-pressed="a11y.active"
-            class="grid size-10 place-items-center rounded-md border transition-colors"
+            class="grid size-10 place-items-center rounded-md border transition-colors pointer-coarse:size-11"
             :class="a11y.active
               ? 'border-accent bg-accent-glow text-accent'
               : 'border-transparent text-text3 hover:bg-accent-glow hover:text-accent'">
@@ -116,9 +119,9 @@ onBeforeUnmount(() => {
 
     <!-- Меню -->
     <transition name="a11y-pop">
-      <div v-if="open" ref="menuEl"
+      <div v-back-close="() => (open = false)" v-if="open" ref="menuEl"
            class="fixed z-50 overflow-y-auto rounded-xl border border-border2 bg-card p-3 shadow-card"
-           :style="{ left: pos.left + 'px', top: pos.top + 'px', width: MENU_W + 'px',
+           :style="{ left: pos.left + 'px', top: pos.top + 'px', width: menuW + 'px',
                      maxWidth: 'calc(100vw - 16px)',
                      maxHeight: menuMaxHeight(typeof window === 'undefined' ? 800 : window.innerHeight) + 'px' }">
         <div class="mb-2 flex items-center gap-2">
@@ -128,7 +131,7 @@ onBeforeUnmount(() => {
           </p>
           <button type="button" @click="open = false"
                   :aria-label="t('common.close', 'Закрыть')"
-                  class="grid size-6 shrink-0 place-items-center rounded text-text3 hover:bg-bg2 hover:text-text">
+                  class="grid size-6 shrink-0 place-items-center rounded text-text3 hover:bg-bg2 hover:text-text pointer-coarse:size-11">
             <X class="size-4" />
           </button>
         </div>

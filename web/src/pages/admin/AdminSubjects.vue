@@ -16,6 +16,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import IconButton from '@/components/ui/IconButton.vue'
 
 const locale = useLocaleStore()
 const toast = useToast()
@@ -178,7 +179,7 @@ async function importPicked(all = false) {
     </div>
 
     <StickyXScroll class="rounded-lg border border-border bg-card shadow-card">
-      <table class="w-full text-sm">
+      <table class="gb-table-pin w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminSubjects.subject', 'Предмет') }}</th>
@@ -199,13 +200,12 @@ async function importPicked(all = false) {
             </td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
               <template v-if="editingRow === s.name">
-                <button class="mr-3 text-text3 hover:text-accent disabled:opacity-50" :disabled="renaming"
-                        :title="locale.t('common.save', 'Сохранить')" @click="saveEdit(s)">✓</button>
-                <button class="text-text3 hover:text-text" :title="locale.t('common.cancel')" @click="cancelEdit">✕</button>
+                <IconButton icon="save" :label="locale.t('common.save', 'Сохранить')" :disabled="renaming" @click="saveEdit(s)" />
+                <IconButton icon="cancel" :label="locale.t('common.cancel')" @click="cancelEdit" />
               </template>
               <template v-else>
-                <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminSubjects.edit', 'Изменить')" @click="startEdit(s)">✎</button>
-                <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(s)">✕</button>
+                <IconButton icon="edit" :label="locale.t('adminSubjects.edit', 'Изменить')" @click="startEdit(s)" />
+                <IconButton icon="delete" tone="danger" :label="locale.t('common.delete')" @click="del(s)" />
               </template>
             </td>
           </tr>

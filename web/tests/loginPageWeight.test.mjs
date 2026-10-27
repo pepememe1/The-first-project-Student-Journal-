@@ -19,6 +19,7 @@ const LOGIN = readFileSync(new URL('../src/pages/LoginPage.vue', import.meta.url
 const SW = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8')
 const MASCOT = readFileSync(new URL('../src/config/mascot.js', import.meta.url), 'utf8')
 const AUTH = readFileSync(new URL('../src/stores/auth.js', import.meta.url), 'utf8')
+const CSS = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8')
 
 /** Маскот на входе монтируется по признаку широкого экрана, а не только скрывается CSS. */
 function mascotMountedOnlyWhenVisible(src) {
@@ -28,7 +29,9 @@ function mascotMountedOnlyWhenVisible(src) {
   //Граница обязана совпадать с классом `lg:` колонки: разойдись они — маскот пропал бы
   //на широком экране или снова качался бы невидимым на узком.
   const query = src.match(/WIDE_QUERY\s*=\s*'([^']+)'/)
-  return !!query && query[1] === '(min-width: 1024px)' && /hidden[^"]*\blg:block/.test(src)
+  const lg = CSS.match(/--breakpoint-lg:\s*(\d+)px/)
+  return !!query && !!lg && query[1] === `(min-width: ${lg[1]}px)`
+    && /hidden[^"]*\blg:block/.test(src)
 }
 
 test('маскот на входе не монтируется там, где его не видно', () => {

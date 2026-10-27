@@ -1,0 +1,86 @@
+#!/bin/sh
+# Не пускает в историю подпись ИИ-помощника: трейлер Co-Authored-By с Claude и
+# подобными, строку «Generated with Claude Code», ссылку на облачную сессию
+# (Claude-Session) и коммит, автором которого записан сам помощник.
+#
+# Зачем. GitHub записывает соавтора из трейлера в контрибьюторы репозитория. Историю
+# из-за этого уже переписывали по всем веткам (filter-branch + force-push), а 16.10.2026
+# такой коммит снова приехал на GitHub из облачной сессии. Одного правила в CLAUDE.md
+# мало, поэтому проверка стоит и в git, и в CI.
+#
+# Подключить у себя один раз (на каждый клон):
+#   git config core.hooksPath tools/git-hooks
+#
+# Режимы:
+#   commit-msg <файл сообщения>   хук git: проверяет новый коммит
+#   commit-msg --range <ревизии>  проверяет уже сделанные коммиты (CI), например HEAD
+
+# Подпись ищем только там, где она стоит подписью: трейлер в начале строки, строка
+# «Generated with/by …» в начале строки. Сообщение, которое лишь рассказывает о запрете
+# («убрал трейлер Co-Authored-By и строку Generated with Claude Code»), проходит.
+VENDORS='claude|anthropic|openai|chatgpt|codex|copilot|gemini|cursor'
+BAD_TEXT="^[[:space:]]*(co-authored-by|signed-off-by):.*($VENDORS)"
+BAD_TEXT="$BAD_TEXT|^[[:space:]]*claude-session:"
+BAD_TEXT="$BAD_TEXT|^[[:space:]]*(🤖[[:space:]]*)?generated (with|by) \\[?($VENDORS)"
+BAD_TEXT="$BAD_TEXT|^[[:space:]]*[a-z-]+:.*noreply@anthropic\\.com"
+# Автор или коммитер — сам помощник: «Claude <…>», «Claude Code <…>», «claude[bot] <…>»,
+# «Copilot <…>». Человека по имени Claude в команде нет; появится — сузить шаблон.
+BAD_IDENT="anthropic\\.com|^($VENDORS)[^<]*<"
+
+explain() {
+    echo "Коммит не принят: $1" >&2
+    echo "Уберите подпись ИИ (Co-Authored-By, Generated with, Claude-Session) и повторите." >&2
+    echo "Автор коммита — человек, который его делает (Ярослав или Влад)." >&2
+}
+
+if [ "$1" = "--range" ]; then
+    # Один проход git log: по два запуска git на коммит на Windows шли минутами.
+    # Шаблоны уходят в awk через окружение: в -v awk съел бы обратные слэши.
+    # Пустой шаблон совпадает с любой строкой, поэтому без него проверка падает,
+    # а не объявляет подписью всю историю. Вывод git log — во временный файл: в конвейере
+    # его код возврата теряется, и неверная ревизия давала бы зелёный результат.
+    log=$(mktemp) || exit 2
+    trap 'rm -f "$log"' EXIT
+    if ! git log --date=short \
+        --format='@@@COMMIT %h %ad %an: %s%n@@@ID %an <%ae>%n@@@ID %cn <%ce>%n%B' \
+        "${2:-HEAD}" > "$log"; then
+        echo "commit-msg: git log не выполнился для «${2:-HEAD}»" >&2
+        exit 2
+    fi
+    GB_BAD_TEXT=$BAD_TEXT GB_BAD_IDENT=$BAD_IDENT awk '
+        BEGIN {
+            text = ENVIRON["GB_BAD_TEXT"]; ident = ENVIRON["GB_BAD_IDENT"]
+            if (text == "" || ident == "") { print "commit-msg: пустой шаблон" > "/dev/stderr"; exit 2 }
+        }
+        /^@@@COMMIT / { cur = substr($0, 11); next }
+        /^@@@ID / { if (tolower(substr($0, 8)) ~ ident) hit(); next }
+        tolower($0) ~ text { hit() }
+        function hit() {
+            if (!(cur in seen)) { seen[cur] = 1; print "Подпись ИИ в коммите " cur > "/dev/stderr" }
+            bad = 1
+        }
+        END { exit bad }
+    ' < "$log"
+    exit $?
+fi
+
+msg=$1
+if [ -z "$msg" ] || [ ! -f "$msg" ]; then
+    echo "commit-msg: не передан файл сообщения" >&2
+    exit 2
+fi
+
+# Строки-комментарии git (#) в коммит не попадают, их не проверяем.
+if grep -v '^#' "$msg" | grep -Eiq "$BAD_TEXT"; then
+    explain "в сообщении есть подпись ИИ-помощника."
+    exit 1
+fi
+
+ident="$(git var GIT_AUTHOR_IDENT 2>/dev/null)
+$(git var GIT_COMMITTER_IDENT 2>/dev/null)"
+if printf '%s\n' "$ident" | grep -Eiq "$BAD_IDENT"; then
+    explain "автором или коммитером записан ИИ-помощник ($(git var GIT_AUTHOR_IDENT 2>/dev/null | sed 's/>.*/>/'))."
+    exit 1
+fi
+
+exit 0

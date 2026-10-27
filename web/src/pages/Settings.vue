@@ -5,7 +5,7 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useRouter, useRoute } from 'vue-router'
-import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RefreshCw, TriangleAlert, LogOut, X, ChevronLeft, ChevronRight, Pencil, Vibrate, VibrateOff } from '@lucide/vue'
+import { Fingerprint, Trash2, ShieldCheck, Volume2, VolumeX, AudioLines, GraduationCap, Check, Mic, MicOff, BellOff, RotateCw, TriangleAlert, LogOut, X, ChevronLeft, ChevronRight, Pencil, Vibrate, VibrateOff } from '@lucide/vue'
 import { adminApi, authApi, meApi, teacherApi } from '@/api/endpoints'
 import ScaleConversionDialog from '@/components/settings/ScaleConversionDialog.vue'
 import FarewellOverlay from '@/components/FarewellOverlay.vue'
@@ -643,7 +643,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
        по высоте — карточка обрезалась снизу на ноутбуке 1366×768 (замер на стенде).
        Теперь окно занимает экран за вычетом тонкого поля, как настройки Discord; потолок
        ширины оставлен, чтобы на 4K строки не растягивались на полтора метра. -->
-  <div class="lg:fixed lg:inset-0 lg:z-40 lg:grid lg:place-items-center lg:bg-black/55 lg:p-4 lg:backdrop-blur-md"
+  <div v-back-close="closeSettings" class="lg:fixed lg:inset-0 lg:z-40 lg:grid lg:place-items-center lg:bg-black/55 lg:p-4 lg:backdrop-blur-md"
        @click.self="closeSettings()">
     <div class="lg:flex lg:h-full lg:max-h-[68rem] lg:w-full lg:max-w-[1500px] lg:overflow-hidden
                 lg:rounded-2xl lg:border lg:border-border2 lg:bg-card lg:shadow-card">
@@ -716,7 +716,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
         <div class="flex items-center gap-2">
           <!-- «Назад» к списку категорий — только на телефоне: на ПК рельс виден всегда,
                и кнопка возврата к нему вела бы в никуда. -->
-          <button type="button" @click="showList = true" class="grid size-8 shrink-0 place-items-center
+          <button v-back-close type="button" @click="showList = true" class="grid size-8 shrink-0 place-items-center pointer-coarse:size-11
                   rounded-md text-text2 hover:bg-bg2 hover:text-text lg:hidden"
                   :aria-label="loc.t('common.back', 'Назад')">
             <ChevronLeft class="size-5" />
@@ -841,7 +841,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
         <p class="text-sm text-text2">{{ loc.t('settings.installed', 'Установлена:') }} <span class="font-semibold text-text">{{ bundle.version }}</span></p>
         <div class="flex flex-wrap gap-2">
           <AppButton variant="ghost" :disabled="bundleBusy" @click="checkUpdate">
-            <RefreshCw class="mr-2 inline size-4" />{{ bundleBusy ? loc.t('settings.checking', 'Проверяем…') : loc.t('settings.checkUpdate', 'Проверить обновление') }}
+            <RotateCw class="mr-2 inline size-4" />{{ bundleBusy ? loc.t('settings.checking', 'Проверяем…') : loc.t('settings.checkUpdate', 'Проверить обновление') }}
           </AppButton>
           <!-- Кнопка появляется, ТОЛЬКО когда есть что ставить: пустая кнопка
                «Установить», которая ничего не делает, — это то же самое «непонятно, как
@@ -955,7 +955,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
             </span>
             <span class="block text-xs text-text3">
               {{ voice.enabled
-                 ? loc.t('settings.voiceButtonShown', 'Кнопка 🎤 доступна рядом с полем вопроса')
+                 ? loc.t('settings.voiceButtonShown', 'Кнопка микрофона доступна рядом с полем вопроса')
                  : loc.t('settings.voiceButtonHidden', 'Кнопка микрофона скрыта') }}
             </span>
           </span>
@@ -1178,7 +1178,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
         </a>
         <a href="/privacy.html" target="_blank" rel="noopener"
            class="flex-1 rounded-sm border border-border bg-card2 px-4 py-2.5 text-center text-sm font-semibold text-text transition-colors hover:border-accent hover:text-accent">
-          {{ loc.t('login.legalPrivacy', 'Политику обработки персональных данных') }}
+          {{ loc.t('settings.legalPrivacy', 'Обработка персональных данных') }}
         </a>
         <!-- ⚠️ Правила — RouterLink, а не `<a href>`: это НАША страница внутри приложения
              (`/rules`), а не статический файл из `web/public`, как соседние два. Ссылка
@@ -1188,6 +1188,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
           {{ loc.t('rules.title', 'Правила сообщества') }}
         </RouterLink>
       </div>
+      <!-- Указание автора — условие лицензии CC-BY 4.0 у рисунков Twemoji (web/public/fonts/Twemoji-LICENSE.txt). -->
+      <p class="mt-3 text-xs text-text3">
+        {{ loc.t('settings.emojiCredit', 'Эмодзи — Twemoji © Twitter, Inc. и другие авторы, лицензия CC-BY 4.0.') }}
+      </p>
     </Card>
       </div><!-- правый столбец -->
     </div><!-- панель -->

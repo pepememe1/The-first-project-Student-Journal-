@@ -75,6 +75,9 @@ def server_metrics(_admin: User = Depends(require_admin),
     #Литтла и загрузкой процесса (см. шапку `request_metrics.py`).
     from ..request_metrics import metrics as _req_metrics
     out["requests"] = _req_metrics.snapshot()
+    #Ошибки интерфейса и время старта у людей (`client_metrics`, без ПДн).
+    from ..client_metrics import metrics as _client_metrics
+    out["client"] = _client_metrics.snapshot()
     #Прогноз места: по суточным снимкам базы (`hostinfo.db_growth_forecast`, метод Холта).
     backups = os.environ.get("GRADEBOOK_BACKUP_DIR") or "/root/gb-backups"
     out["forecast"] = hostinfo.db_growth_forecast(backups, int(out.get("disk", {}).get("free") or 0))

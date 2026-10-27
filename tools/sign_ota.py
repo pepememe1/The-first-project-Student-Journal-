@@ -27,6 +27,13 @@ ECDSA P-256 + SHA-256, подпись — 64 байта r||s в base64 (ровн
 ⚠️ `verify` проверяет тем же списком ключей, что вшит в приложение
 (`web/src/config/ota-public-keys.json`): «есть ли поле sig» ничего не доказывает — подпись
 чужим ключом тоже поле.
+
+━━ ПОФАЙЛОВОЕ ОБНОВЛЕНИЕ (23.10.2026) ━━
+Плагин умеет качать только изменённые файлы по списку «имя + SHA-256», а сумму целого
+архива в этом режиме не сверяет вовсе: целостность держится только на списке. Поэтому
+вторая подпись, `files_sig`, ставится над версией, суммой архива и отпечатком списка его
+файлов (`ota_files.files_digest`). Нет подписи или не сошлась — приложение качает архив
+целиком под `sig`, как с 4.1.
 """
 import base64
 import json
@@ -34,6 +41,9 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+import ota_files  # noqa: E402
 KEYS_FILE = os.path.join(ROOT, "web", "src", "config", "ota-public-keys.json")
 PRIVATE_KEY = os.path.join(os.path.expanduser("~"), ".gradebook", "ota_signing_key.pem")
 
@@ -41,6 +51,22 @@ PRIVATE_KEY = os.path.join(os.path.expanduser("~"), ".gradebook", "ota_signing_k
 def ota_payload(version: str, checksum: str) -> bytes:
     """Что подписывается. ОДНА формула с `otaPayload` в `web/src/utils/otaVerify.js`."""
     return f"gradebook-ota:v1:{version}:{(checksum or '').lower()}".encode("utf-8")
+
+
+def ota_files_payload(version: str, checksum: str, digest: str) -> bytes:
+    """Что подписывается для пофайлового обновления. ОДНА формула с `otaFilesPayload` в JS."""
+    return f"gradebook-ota:files:v1:{version}:{(checksum or '').lower()}:{digest}".encode("utf-8")
+
+
+def bundle_digest(manifest_path: str, data: dict) -> str:
+    """Отпечаток списка файлов архива, лежащего рядом с манифестом ('' — архива нет)."""
+    name = str(data.get("file") or "")
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return ""
+    path = os.path.join(os.path.dirname(os.path.abspath(manifest_path)), name)
+    if not os.path.isfile(path):
+        return ""
+    return ota_files.files_digest(ota_files.zip_file_list(path))
 
 
 def public_keys(path: str = KEYS_FILE) -> list:
@@ -109,7 +135,16 @@ def main(argv) -> int:
                   "подписать нечем")
             return 1
         with open(PRIVATE_KEY, "rb") as fh:
-            data["sig"] = sign_payload(ota_payload(version, checksum), fh.read())
+            private_pem = fh.read()
+        data["sig"] = sign_payload(ota_payload(version, checksum), private_pem)
+        digest = bundle_digest(path, data)
+        if digest:
+            data["files_sig"] = sign_payload(ota_files_payload(version, checksum, digest),
+                                             private_pem)
+        else:
+            data.pop("files_sig", None)
+            print("ВНИМАНИЕ: архива рядом с манифестом нет — пофайловое обновление не "
+                  "подписано, телефоны скачают бандл целиком")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
         print(f"подписан {version}")
@@ -117,7 +152,14 @@ def main(argv) -> int:
         print("ОШИБКА: подпись манифеста не сходится с ключами приложения — телефоны "
               "откажутся ставить этот бандл")
         return 1
-    print(f"подпись {version} сходится с ключом приложения")
+    digest = bundle_digest(path, data)
+    if digest and not verify_payload(ota_files_payload(version, checksum, digest),
+                                     str(data.get("files_sig") or ""), keys):
+        print("ОШИБКА: подпись списка файлов не сходится с архивом или ключами приложения — "
+              "пофайловое обновление телефоны отвергнут")
+        return 1
+    print(f"подпись {version} сходится с ключом приложения"
+          + (" (и список файлов)" if digest else ""))
     return 0
 
 

@@ -221,7 +221,7 @@ onBeforeUnmount(() => {
        а на экране было пусто.
        ⚠️ Любой новый плавающий слой пасхалки — только через <Teleport to="body">. -->
     <button v-if="voice" type="button" @click="heedVoice"
-            class="pointer-events-auto fixed inset-x-4 bottom-4 z-[88] mx-auto block max-w-xl rounded-[5px]
+            class="pointer-events-auto fixed inset-x-4 bottom-[calc(1rem+var(--gb-bottom-chrome))] z-[88] mx-auto block max-w-xl rounded-[5px]
                    border px-4 py-3 text-left transition duration-300 hover:brightness-125"
             :class="voiceIn ? 'translate-y-0 opacity-100' : 'translate-y-2.5 opacity-0'"
             style="background:rgba(12,16,22,.96);border-color:#3c4f63">

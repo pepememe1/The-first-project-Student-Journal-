@@ -1,4 +1,5 @@
 <script setup>
+import GbIcon from '@/components/ui/GbIcon.vue'
 // InsightCards — проактивные карточки Вектора (порт vector/insights.py + widget):
 // сервер отдаёт готовые факты-карточки {severity, icon, title, detail, action},
 // здесь только отрисовка severity-цветом. info — акцент, warn — оранж, alert — красный.
@@ -24,7 +25,9 @@ const TITLE = { info: 'text-accent', warn: 'text-orange', alert: 'text-red' }
     <div v-for="(c, i) in cards" :key="i"
          class="min-w-0 break-words rounded-lg border p-3.5" :class="STYLES[c.severity] || STYLES.info">
       <p class="flex items-start gap-2 text-sm font-bold" :class="TITLE[c.severity] || TITLE.info">
-        <span class="shrink-0">{{ c.icon }}</span>
+        <!-- icon_name — значок из общего словаря; эмодзи в icon — для ответа старого сервера. -->
+        <GbIcon v-if="c.icon_name" :name="c.icon_name" class="mt-0.5 size-4 shrink-0" />
+        <span v-else class="shrink-0">{{ c.icon }}</span>
         <!-- Заголовок отдельным span'ом: голый текст рядом с иконкой стал бы анонимным
              элементом flex, которому нельзя задать min-w-0, и он распирал бы карточку. -->
         <span class="min-w-0">{{ c.title }}</span>

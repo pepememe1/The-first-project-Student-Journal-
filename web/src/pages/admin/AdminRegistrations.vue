@@ -11,6 +11,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import IconButton from '@/components/ui/IconButton.vue'
 
 const locale = useLocaleStore()
 const toast = useToast()
@@ -80,7 +81,7 @@ async function reject(r) {
               <AppButton variant="green" size="sm" :disabled="busy === r.id" @click="approve(r)">
                 {{ busy === r.id ? '…' : locale.t('adminRegistrations.approve', 'Одобрить') }}
               </AppButton>
-              <button class="ml-2 text-text3 hover:text-red" :title="locale.t('adminRegistrations.reject', 'Отклонить')" :disabled="busy === r.id" @click="reject(r)">✕</button>
+              <IconButton icon="cancel" tone="danger" :label="locale.t('adminRegistrations.reject', 'Отклонить')" :disabled="busy === r.id" @click="reject(r)" />
             </td>
           </tr>
         </tbody>

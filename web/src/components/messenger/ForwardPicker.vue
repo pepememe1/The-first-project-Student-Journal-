@@ -29,7 +29,7 @@ function initials(name) {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-back-close class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="flex max-h-[80vh] w-full max-w-sm flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border p-4">

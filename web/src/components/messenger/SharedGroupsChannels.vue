@@ -26,6 +26,7 @@ import { useMessengerStore } from '@/stores/messenger'
 import { messengerApi } from '@/api/endpoints'
 import { BY_ID, RARITY } from '@/config/achievements'
 import Avatar from '@/components/ui/Avatar.vue'
+import AchievementBadge from '@/components/ui/AchievementBadge.vue'
 
 const props = defineProps({
   userId: { type: String, default: '' },
@@ -119,7 +120,7 @@ const TABS = computed(() => [
         <ul v-if="trophies.length" class="space-y-1.5">
           <li v-for="a in trophies" :key="a.id"
               class="flex items-start gap-2 rounded-lg border border-border2 bg-card2 p-2">
-            <span class="grid size-7 shrink-0 place-items-center rounded-md bg-accent-glow text-base">{{ a.icon }}</span>
+            <AchievementBadge :icon="a.icon" :rarity="a.rarity" :size="28" />
             <span class="min-w-0">
               <span class="block truncate text-[12.5px] font-semibold text-text">{{ a.title }}</span>
               <span class="block text-[10.5px]" :style="{ color: RARITY[a.rarity].color }">

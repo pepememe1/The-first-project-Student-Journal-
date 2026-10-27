@@ -185,7 +185,7 @@ async function shoo() {
   <!-- Заставка «поверните экран». Стоит ПЕРЕД офисом и перекрывает его (z выше): пока
        телефон в портрете, показывать обрезанный на три четверти кадр незачем — человек
        увидит стол без ноутбука и решит, что пасхалка сломана. -->
-  <div v-if="needRotate" class="fixed inset-0 z-[95] grid place-items-center bg-black px-6 text-center">
+  <div v-back-close="() => emit('close')" v-if="needRotate" class="fixed inset-0 z-[95] grid place-items-center bg-black px-6 text-center">
     <div>
       <!-- Значок телефона, доворачивающийся в ландшафт: он объясняет просьбу быстрее
            текста, а на этой сцене текста и так минимум. -->
@@ -209,7 +209,7 @@ async function shoo() {
     </div>
   </div>
 
-  <div v-if="inOffice" class="fixed inset-0 z-[94] bg-black bg-cover bg-center bg-no-repeat"
+  <div v-back-close="() => emit('close')" v-if="inOffice" class="fixed inset-0 z-[94] bg-black bg-cover bg-center bg-no-repeat"
        style="background-image:url(/easter/img/office.webp)">
     <!-- ⚠️ ХИТБОКС НОУТБУКА БЕЗ ОБВОДКИ (просьба Влада): пунктирная рамка поверх
          фотографии офиса читалась как элемент интерфейса и ломала погружение —

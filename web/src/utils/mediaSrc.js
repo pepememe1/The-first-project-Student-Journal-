@@ -18,7 +18,7 @@
  * `web/tests/mediaSrc.test.mjs` (свойство по всем компонентам с картинками людей).
  */
 import { getApiBase } from '../api/server.js'
-import { isDesktopApp } from './platform.js'
+import { isPcProgram } from './platform.js'
 
 export const AVATAR_PATH = '/media/avatar'
 const KLIPY_HOST = 'static.klipy.com'
@@ -37,8 +37,63 @@ export function isKlipyUrl(value) {
 export function mediaSrc(value) {
   if (!value || typeof value !== 'string') return ''
   if (value.startsWith(AVATAR_PATH + '?')) return (getApiBase() || '') + value
-  if (isKlipyUrl(value) && isDesktopApp()) return '/desk/media?u=' + encodeURIComponent(value)
+  if (isKlipyUrl(value) && isPcProgram()) return '/desk/media?u=' + encodeURIComponent(value)
   return value
+}
+
+/**
+ * Ролик MP4 вместо гифки Klipy (23.10.2026). Тот же адрес с `.mp4` вместо `.gif`: CDN
+ * отдаёт оба, а ролик легче в десятки и сотни раз — у одной аватарки 13,7 МБ GIF против
+ * 27 КБ MP4, и такую гифку телефон не смог показать вовсе. Так «гифки» показывают
+ * Telegram, X и Discord. '' — не гифка Klipy, или окно программы: там гифки идут через
+ * кэш `/desk/media`, который принимает только картинки. Ролик не открылся — вызывающий
+ * показывает прежнюю картинку (`mediaSrc`).
+ */
+export function gifVideoSrc(value) {
+  return klipyVariant(value, '.mp4')
+}
+
+/**
+ * Первый кадр той же гифки — неподвижный webp по тому же адресу (у той же аватарки 55 КБ).
+ * Показывается сразу, пока ролик ещё едет, — как у аватарок в Discord: вид появляется
+ * мгновенно, движение — следом.
+ */
+export function gifPosterSrc(value) {
+  return klipyVariant(value, '.webp')
+}
+
+/**
+ * Запустить беззвучный ролик, как только он готов (`@canplay`). Одного `autoplay` мало:
+ * проверено 26.10.2026 — Chromium грузил ролик до конца и оставлял его на первом кадре,
+ * а явный `play()` запускал сразу. Отказ браузера (экономия батареи) не ошибка: остаётся
+ * первый кадр.
+ */
+export function playMuted(e) {
+  const v = e?.target
+  if (!v) return
+  v.muted = true
+  v.play?.()?.catch?.(() => {})
+}
+
+function klipyVariant(value, ext) {
+  if (!isKlipyUrl(value) || isPcProgram()) return ''
+  const u = new URL(value)
+  if (!/\.gif$/i.test(u.pathname)) return ''
+  u.pathname = u.pathname.replace(/\.gif$/i, ext)
+  return u.toString()
+}
+
+/**
+ * Следить, виден ли элемент (с запасом в 200 px): ролик гифки качается, когда до него
+ * долистали, и стоит на паузе вне экрана — иначе список чатов тянул бы все ролики разом.
+ * Без IntersectionObserver считаем видимым. Возвращает функцию отписки.
+ */
+export function watchInView(el, onChange) {
+  if (!el || typeof IntersectionObserver !== 'function') { onChange(true); return () => {} }
+  const io = new IntersectionObserver((entries) => onChange(entries.some((e) => e.isIntersecting)),
+    { rootMargin: '200px' })
+  io.observe(el)
+  return () => io.disconnect()
 }
 
 /**
@@ -47,7 +102,7 @@ export function mediaSrc(value) {
  * и так наполнится при показе. Партиями в простое, чтобы не отнять сеть у переписки.
  */
 export function prefetchImages(urls, { limit = 48, batch = 6 } = {}) {
-  if (!isDesktopApp() || typeof Image === 'undefined') return 0
+  if (!isPcProgram() || typeof Image === 'undefined') return 0
   const list = [...new Set((urls || []).filter(Boolean))].slice(0, limit).map(mediaSrc)
   const idle = (fn) => (typeof requestIdleCallback === 'function'
     ? requestIdleCallback(fn, { timeout: 3000 }) : setTimeout(fn, 200))

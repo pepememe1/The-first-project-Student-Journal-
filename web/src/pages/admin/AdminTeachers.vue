@@ -14,6 +14,8 @@ import { useToast } from '@/composables/useToast'
 import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
 import { formatCollege } from '@/utils/collegeTime'
+import GbIcon from '@/components/ui/GbIcon.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -159,7 +161,7 @@ async function del(t) {
     </div>
 
     <StickyXScroll class="rounded-lg border border-border bg-card shadow-card">
-      <table class="w-full text-sm">
+      <table class="gb-table-pin w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminTeachers.colFullName', 'ФИО') }}</th>
@@ -189,8 +191,8 @@ async function del(t) {
             <td class="whitespace-nowrap px-4 py-2.5 text-text3" :title="t.device ? locale.t('adminTeachers.deviceTitle', { device: t.device }) : ''">{{ fmtDT(t.last_login) }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text3">{{ t.ip || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button class="mr-3 text-text3 hover:text-accent" :title="locale.t('adminTeachers.edit', 'Изменить')" @click="openEdit(t)">✎</button>
-              <button class="text-text3 hover:text-red" :title="locale.t('common.delete')" @click="del(t)">✕</button>
+              <IconButton icon="edit" :label="locale.t('adminTeachers.edit', 'Изменить')" @click="openEdit(t)" />
+              <IconButton icon="delete" tone="danger" :label="locale.t('common.delete')" @click="del(t)" />
             </td>
           </tr>
         </tbody>
@@ -239,8 +241,9 @@ async function del(t) {
               <div class="relative flex-1">
                 <input v-model="form.password" :type="showPass ? 'text' : 'password'" placeholder="••••••••"
                        class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
-                <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent" @click="showPass = !showPass">
-                  {{ showPass ? '🙈' : '👁' }}
+                <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent"
+                        :aria-label="showPass ? locale.t('login.hide', 'Скрыть') : locale.t('login.show', 'Показать')" @click="showPass = !showPass">
+                  <GbIcon :name="showPass ? 'hide' : 'show'" class="size-4" />
                 </button>
               </div>
               <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"

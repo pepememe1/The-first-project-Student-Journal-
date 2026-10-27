@@ -30,6 +30,7 @@ import ProfileEggs from '@/components/easter/ProfileEggs.vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { studentApi } from '@/api/endpoints'
 import { Camera, Check, Film, Sparkles, SquareDashed } from '@lucide/vue'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const auth = useAuthStore()
 const profile = useProfileStore()
@@ -245,7 +246,7 @@ const styleSummary = computed(() => {
         <Card v-if="auth.role === 'student'" id="set-achievements" :title="locale.t('achievements.title', 'Достижения')" :subtitle="locale.t('achievements.subtitle', 'То, что вы нашли сами')">
           <button type="button" @click="achievementsOpen = true"
                   class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">
-            <span class="grid size-9 shrink-0 place-items-center rounded-full bg-accent-glow text-lg">🏆</span>
+            <span class="grid size-9 shrink-0 place-items-center rounded-full bg-accent-glow text-accent"><GbIcon name="trophy" class="size-5" /></span>
             <span class="text-sm font-medium text-text">{{ locale.t('achievements.open', 'Открыть достижения') }}</span>
           </button>
         </Card>

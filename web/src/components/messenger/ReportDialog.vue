@@ -19,9 +19,12 @@ const REASONS = computed(() => [
   ['flood', locale.t('report.flood', 'Флуд')],
   ['other', locale.t('report.other', 'Другое')],
 ])
-const reason = ref('spam')
+// Причина не выбрана заранее: с готовым «Спам» жалоба уходила одним нажатием с причиной,
+// которую человек не выбирал (живой прогон 27.10.2026).
+const reason = ref('')
 const description = ref('')
-const canSubmit = computed(() => reason.value !== 'other' || description.value.trim().length > 0)
+const canSubmit = computed(() => !!reason.value
+  && (reason.value !== 'other' || description.value.trim().length > 0))
 
 function submit() {
   if (!canSubmit.value) return
@@ -47,7 +50,7 @@ function submit() {
 
       <div class="space-y-1.5">
         <label v-for="r in REASONS" :key="r[0]"
-               class="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-text hover:bg-bg2">
+               class="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-text hover:bg-bg2 pointer-coarse:min-h-11">
           <input type="radio" name="reason" :value="r[0]" v-model="reason" class="accent-[var(--gb-accent)]" />
           {{ r[1] }}
         </label>

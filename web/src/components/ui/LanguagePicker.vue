@@ -35,7 +35,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   <div ref="root" class="relative">
     <button type="button" :aria-label="loc.t('login.language')" :title="loc.t('login.language')"
             :aria-expanded="open" aria-haspopup="listbox"
-            class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm transition-colors"
+            class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm transition-colors pointer-coarse:min-h-11"
             :class="tone === 'light'
               ? 'border-white/25 bg-black/25 text-white hover:border-white/50'
               : 'border-border bg-card2 text-text2 hover:border-accent'"
@@ -44,12 +44,12 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
       <span class="text-base leading-none">{{ loc.current.flag }}</span>
     </button>
 
-    <ul v-if="open" role="listbox"
+    <ul v-back-close="() => (open = false)" v-if="open" role="listbox"
         class="absolute right-0 z-50 mt-1.5 min-w-[160px] overflow-hidden rounded-lg border border-border bg-card shadow-xl">
       <li v-for="l in loc.locales" :key="l.code" role="option"
           :aria-selected="l.code === loc.locale">
         <button type="button"
-                class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-card2"
+                class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-card2 pointer-coarse:py-3"
                 :class="l.code === loc.locale ? 'text-accent' : 'text-text2'"
                 @click="pick(l.code)">
           <span class="text-base leading-none">{{ l.flag }}</span>

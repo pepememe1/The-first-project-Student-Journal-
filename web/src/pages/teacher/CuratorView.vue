@@ -8,16 +8,22 @@ import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { curatorApi, adminApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import RiskBadge from '@/components/ui/RiskBadge.vue'
+import TabExplainer from '@/components/ui/TabExplainer.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
 import InviteDialog from '@/components/admin/InviteDialog.vue'
 import RolloutDialog from '@/components/account/RolloutDialog.vue'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const { confirm } = useConfirm()
 const toast = useToast()
 const locale = useLocaleStore()
+//Пояснения к вкладкам «Риск» и «Перевод на курс» (23.10.2026). Числа — из
+//dropout_risk.LEVELS и MIN_VISIBLE; поменялись там — правится и здесь.
+const RISK_MORE_RU = 'Индекс от 0 до 100 складывается из фактов журнала: несданные экзамены и незакрытые долги, низкий средний балл, пропуски, предметы без единой отметки, недобор ЗЕТ, резкое падение оценок.\nОт 20 — умеренный, от 40 — повышенный, от 65 — высокий, от 85 — критический; ниже 20 студент здесь не показывается. Когда оценок мало, индекс осторожнее: две двойки — ещё не приговор.\nПод каждой фамилией — причины и совет, что можно сделать.'
+const ZET_MORE_RU = '1. Впишите порог — сколько ЗЕТ нужно для перевода — и нажмите «Сохранить».\n2. Таблица отметит зелёной галочкой готовых и красным крестиком тех, кому не хватает, со списком несданных предметов.\n3. Нажмите «выбрать готовых», затем «Перевести выбранных». Перевод записывается в журнал действий и объявляется в канале группы.\nЗЕТ предметам назначает администратор: если таблица пустая, их ещё не назначили.'
 
 const groups = ref([])
 const group = ref('')
@@ -171,14 +177,32 @@ async function loadSubgroupInfo() {
 }
 watch(subject, loadSubgroupInfo)
 
-async function toggleSplit(on) {
+//Флажок меняет данные группы одним касанием, а стоял рядом с частыми кнопками (живой
+//прогон 23.10.2026: промах пальцем = переделанное расписание подгрупп). Спрашиваем
+//перед изменением; отказ возвращает флажок как был.
+async function toggleSplit(on, box) {
   if (!group.value || !subject.value) return
+  const ok = await confirm({
+    title: on ? locale.t('curatorView.splitConfirmOnTitle', 'Включить раздельное обучение?')
+      : locale.t('curatorView.splitConfirmOffTitle', 'Выключить раздельное обучение?'),
+    message: on
+      ? locale.t('curatorView.splitConfirmOn', { subject: subject.value })
+      : locale.t('curatorView.splitConfirmOff', { subject: subject.value }),
+    okText: on ? locale.t('curatorView.splitConfirmOnOk', 'Включить')
+      : locale.t('curatorView.splitConfirmOffOk', 'Выключить'),
+  })
+  if (!ok) { if (box) box.checked = !on; return }
   splitToggling.value = true
   try {
     await curatorApi.setSubjectSplit(group.value, subject.value, on)
     await loadSubgroupInfo()
     if (!on) toast.success(locale.t('curatorView.splitDisabled', 'Раздельное обучение выключено'))
-  } catch (e) { toast.error(e?.response?.data?.detail || locale.t('curatorView.splitToggleFailed', 'Не удалось изменить')) }
+  } catch (e) {
+    //Сервер не принял — флажок как был: `:checked` привязан к состоянию сервера, и раз оно
+    //не изменилось, Vue сам отметку не вернёт (Полковник 23.10.2026).
+    if (box) box.checked = !on
+    toast.error(e?.response?.data?.detail || locale.t('curatorView.splitToggleFailed', 'Не удалось изменить'))
+  }
   finally { splitToggling.value = false }
 }
 
@@ -274,11 +298,18 @@ async function exportReport(fmt) {
         </select>
         <button class="flex h-10 items-center gap-1.5 rounded-sm border border-accent bg-accent/10 px-3 text-sm font-medium text-accent hover:bg-accent/20 sm:ml-auto"
                 @click="openExport">
-          📊 {{ locale.t('curatorView.reportButton', 'Отчёт успеваемости') }}
+          <GbIcon name="report" class="size-4 shrink-0" /> {{ locale.t('curatorView.reportButton', 'Отчёт успеваемости') }}
         </button>
         <button class="flex h-10 items-center gap-1.5 rounded-sm border border-border2 bg-card2 px-3 text-sm font-medium text-text2 hover:border-accent hover:text-accent"
                 @click="showRollout = true">
-          🔑 {{ locale.t('rollout.title', 'Логины и пароли группы') }}
+          <GbIcon name="key" class="size-4 shrink-0" /> {{ locale.t('rollout.title', 'Логины и пароли группы') }}
+        </button>
+        <!-- Здесь, среди действий с группой, а не рядом с флажком раздельного обучения:
+             частая кнопка не должна стоять вплотную к изменяющей данные. -->
+        <button v-if="group" type="button"
+                class="flex h-10 items-center gap-1.5 rounded-sm border border-border2 bg-card2 px-3 text-sm font-medium text-text2 hover:border-accent hover:text-accent"
+                @click="showInvite = true">
+          <GbIcon name="invite" class="size-4 shrink-0" /> {{ locale.t('curatorView.inviteButton', 'Пригласить студентов') }}
         </button>
       </div>
       <RolloutDialog v-if="showRollout" @close="showRollout = false" />
@@ -286,9 +317,10 @@ async function exportReport(fmt) {
       <!-- Раздельное обучение (§ролей, 3.6.1): куратор включает здесь, второй преподаватель
            занимается в редакторе часов группы (админка), подгруппы — кнопкой ниже. -->
       <div v-if="subject && !subgroupLoading" class="flex flex-wrap items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2">
-        <label class="flex cursor-pointer items-center gap-2 text-sm text-text">
+        <label class="flex min-h-11 cursor-pointer items-center gap-2.5 text-sm text-text">
           <input type="checkbox" :checked="!!subgroupInfo?.split" :disabled="splitToggling"
-                 @change="toggleSplit($event.target.checked)" />
+                 class="size-5 shrink-0 accent-[var(--gb-accent)]"
+                 @change="toggleSplit($event.target.checked, $event.target)" />
           {{ locale.t('curatorView.splitCheckbox', 'Раздельное обучение') }}
         </label>
         <template v-if="subgroupInfo?.split">
@@ -299,13 +331,9 @@ async function exportReport(fmt) {
             }) }}
           </span>
           <button type="button" class="ml-auto text-sm font-medium text-accent hover:underline" @click="openSubgroups">
-            👥 {{ locale.t('curatorView.subgroupsButton', 'Подгруппы') }}
+            <GbIcon name="group" class="size-4 shrink-0" /> {{ locale.t('curatorView.subgroupsButton', 'Подгруппы') }}
           </button>
         </template>
-        <button v-if="group" type="button" class="text-sm font-medium text-accent hover:underline"
-                :class="subgroupInfo ? '' : 'ml-auto'" @click="showInvite = true">
-          ✉ {{ locale.t('curatorView.inviteButton', 'Пригласить студентов') }}
-        </button>
       </div>
 
       <InviteDialog v-if="showInvite" :group="group" @close="showInvite = false" />
@@ -315,12 +343,12 @@ async function exportReport(fmt) {
         <button type="button" @click="viewMode = 'journal'"
                 class="border-b-2 px-3 py-2 text-sm font-medium"
                 :class="viewMode === 'journal' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
-          {{ locale.t('curatorView.tabJournal', 'Журнал') }} <span class="text-xs">👁</span>
+          {{ locale.t('curatorView.tabJournal', 'Журнал') }} <GbIcon name="show" class="inline-block size-3.5 align-[-2px]" />
         </button>
         <button type="button" @click="viewMode = 'zet'"
                 class="border-b-2 px-3 py-2 text-sm font-medium"
                 :class="viewMode === 'zet' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
-          {{ locale.t('curatorView.tabZet', 'ЗЕТ · Перевод на курс') }}
+          {{ locale.t('curatorView.tabZet', 'Перевод на курс (ЗЕТ)') }}
         </button>
         <!-- Риск отчисления (3.6). Счётчик стоит прямо на вкладке: куратор обязан
              увидеть, что там кто-то есть, НЕ открывая её. -->
@@ -361,12 +389,12 @@ async function exportReport(fmt) {
             <button :disabled="exporting || !pickedGroups.length"
                     class="flex-1 rounded-sm bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
                     @click="exportReport('xlsx')">
-              {{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : `📗 ${locale.t('curatorView.excel', 'Excel')}` }}
+              <GbIcon v-if="!exporting" name="excel" class="size-4 shrink-0" />{{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : locale.t('curatorView.excel', 'Excel') }}
             </button>
             <button :disabled="exporting || !pickedGroups.length"
                     class="flex-1 rounded-sm bg-blue px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
                     @click="exportReport('docx')">
-              {{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : `📘 ${locale.t('curatorView.word', 'Word')}` }}
+              <GbIcon v-if="!exporting" name="word" class="size-4 shrink-0" />{{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : locale.t('curatorView.word', 'Word') }}
             </button>
             <button class="rounded-sm border border-border2 px-4 py-2.5 text-sm text-text2 hover:bg-bg2"
                     @click="showExport = false">{{ locale.t('common.cancel') }}</button>
@@ -376,7 +404,7 @@ async function exportReport(fmt) {
 
       <template v-if="viewMode === 'journal'">
         <p class="text-xs text-text3">
-          👁 {{ locale.t('curatorView.readOnlyHint', 'Только просмотр (куратор) — оценки ставит преподаватель.') }}
+          <GbIcon name="show" class="inline-block size-4 align-[-3px]" /> {{ locale.t('curatorView.readOnlyHint', 'Только просмотр (куратор) — оценки ставит преподаватель.') }}
           <!-- План часов задаёт админ. Не задан (total=0) — строку не показываем вовсе -->
           <span v-if="data?.hours?.total" class="text-accent">
             · {{ locale.t('curatorView.hoursProgress', { done: data.hours.done, total: data.hours.total }) }}
@@ -418,9 +446,9 @@ async function exportReport(fmt) {
 
       <!-- Риск отчисления по всей группе (3.6, dropout_risk.py) -->
       <template v-else-if="viewMode === 'risk'">
-        <p class="text-xs text-text3">
-          {{ locale.t('curatorView.riskHint', 'Показаны только те, у кого риск реально есть. Индекс складывается из фактов журнала — наведите на плашку, чтобы увидеть причины.') }}
-        </p>
+        <TabExplainer :lead="locale.t('curatorView.riskLead', 'Кого журнал отмечает как кандидата на отчисление: пропуски, двойки, несданные экзамены, долги. Это подсказка, с кем поговорить, а не решение.')"
+                      :more="locale.t('curatorView.riskMore', RISK_MORE_RU)"
+                      :more-label="locale.t('curatorView.howCounted', 'Как это считается')" />
         <p v-if="riskLoading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
         <EmptyState v-else-if="!riskReport?.students?.length"
                     :title="locale.t('curatorView.riskEmptyTitle', 'В зоне риска никого')"
@@ -449,13 +477,15 @@ async function exportReport(fmt) {
 
       <!-- ЗЕТ · Перевод на курс (docs/done/PLAN-ZET.md §7.4 — «главная фича») -->
       <template v-else>
+        <TabExplainer :lead="locale.t('curatorView.zetLead', 'ЗЕТ — зачётные единицы, «вес» предмета: студент получает их, когда сдаёт предмет. Здесь видно, кто набрал достаточно для перевода на следующий курс.')"
+                      :more="locale.t('curatorView.zetMore', ZET_MORE_RU)"
+                      :more-label="locale.t('curatorView.howToUse', 'Как пользоваться')" />
         <div class="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3 shadow-card">
           <span class="text-sm text-text2">{{ locale.t('curatorView.thresholdLabel', 'Порог перевода (ЗЕТ):') }}</span>
           <input v-model="zetThresholdDraft" type="number" min="0" step="0.5" :placeholder="locale.t('curatorView.thresholdPlaceholder', 'не задан')"
                  class="h-9 w-28 rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
           <button type="button" @click="saveThreshold"
                   class="rounded-sm bg-accent px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">{{ locale.t('common.save') }}</button>
-          <p class="basis-full text-xs text-text3">{{ locale.t('curatorView.zetExplain', 'ЗЕТ — зачётные единицы: «вес» предмета. Студент получает их, когда предмет сдан. Порог — сколько единиц нужно набрать для перевода на следующий курс.') }}</p>
         </div>
         <p v-if="zetReport && !zetThresholdSet" role="status"
            class="rounded-sm border border-orange/40 bg-orange/10 px-3 py-2 text-xs text-text2">
@@ -476,7 +506,7 @@ async function exportReport(fmt) {
             </div>
             <button type="button" :disabled="!selectedForPromote.length || promoting" @click="doPromote"
                     class="shrink-0 rounded-sm bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50">
-              {{ promoting ? locale.t('curatorView.promoting', 'Перевод…') : `✅ ${locale.t('curatorView.promoteSelected', { n: selectedForPromote.length })}` }}
+              <GbIcon v-if="!promoting" name="promote" class="size-4 shrink-0" />{{ promoting ? locale.t('curatorView.promoting', 'Перевод…') : locale.t('curatorView.promoteSelected', { n: selectedForPromote.length }) }}
             </button>
           </div>
           <table class="w-full text-sm">
@@ -501,7 +531,7 @@ async function exportReport(fmt) {
                          :disabled="!s.eligible" class="accent-accent" />
                 </td>
                 <td class="px-3 py-2 text-text">
-                  <span v-if="zetThresholdSet" :class="s.eligible ? 'text-accent' : 'text-red'">{{ s.eligible ? '✅' : '❌' }}</span>
+                  <GbIcon v-if="zetThresholdSet" :name="s.eligible ? 'ok' : 'fail'" class="inline-block size-4 align-[-3px]" :class="s.eligible ? 'text-accent' : 'text-red'" />
                   {{ s.display_name }}
                 </td>
                 <td class="px-3 py-2 text-right text-text2">
@@ -521,7 +551,7 @@ async function exportReport(fmt) {
       <div v-dialog v-if="showSubgroups" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
            @click.self="showSubgroups = false">
         <div class="flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border border-border bg-card p-5 shadow-card">
-          <h3 class="mb-1 font-title text-lg font-bold text-text">👥 {{ locale.t('curatorView.subgroupsModalTitle', 'Подгруппы') }}</h3>
+          <h3 class="mb-1 flex items-center gap-2 font-title text-lg font-bold text-text"><GbIcon name="group" class="size-5 shrink-0 text-accent" />{{ locale.t('curatorView.subgroupsModalTitle', 'Подгруппы') }}</h3>
           <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }}</p>
           <div class="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
             <div v-for="s in (subgroupInfo?.students || [])" :key="s.student_id"
@@ -536,7 +566,7 @@ async function exportReport(fmt) {
                         @click="subgroupDraft[s.student_id] = 2">2{{ locale.t('curatorView.subgroupShort', 'ПГ') }}</button>
                 <button type="button" class="border-l border-border2 px-2 py-1 text-xs text-text3 hover:bg-bg2"
                         :title="locale.t('curatorView.subgroupClear', 'Не назначен')"
-                        @click="subgroupDraft[s.student_id] = null">✕</button>
+                        @click="subgroupDraft[s.student_id] = null"><GbIcon name="remove" class="size-3.5" /></button>
               </div>
             </div>
             <p v-if="!subgroupInfo?.students?.length" class="py-6 text-center text-sm text-text3">

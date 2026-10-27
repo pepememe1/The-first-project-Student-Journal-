@@ -21,6 +21,7 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
 import { formatCollege } from '@/utils/collegeTime'
+import IconButton from '@/components/ui/IconButton.vue'
 
 const locale = useLocaleStore()
 const auth = useAuthStore()
@@ -203,7 +204,7 @@ async function deleteEdit() {
 
     <!-- ── Аккаунты родителей (правка/удаление — только админ) ────────────────────── -->
     <StickyXScroll v-if="isAdmin" class="rounded-lg border border-border bg-card shadow-card">
-      <table class="w-full text-sm">
+      <table class="gb-table-pin w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminParents.colAccounts', 'Аккаунты родителей') }}</th>
@@ -217,7 +218,7 @@ async function deleteEdit() {
             <td class="px-4 py-2.5 text-text">{{ p.full_name || '—' }}</td>
             <td class="px-4 py-2.5 text-text2">{{ p.login }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button class="text-text3 hover:text-accent" :title="locale.t('adminParents.edit', 'Изменить')" @click="openEdit(p)">✎</button>
+              <IconButton icon="edit" :label="locale.t('adminParents.edit', 'Изменить')" @click="openEdit(p)" />
             </td>
           </tr>
         </tbody>
@@ -225,7 +226,7 @@ async function deleteEdit() {
     </StickyXScroll>
 
     <StickyXScroll class="rounded-lg border border-border bg-card shadow-card">
-      <table class="w-full text-sm">
+      <table class="gb-table-pin w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminParents.colParent', 'Родитель') }}</th>
@@ -248,8 +249,7 @@ async function deleteEdit() {
               </Badge>
             </td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button v-if="l.status !== 'revoked'" class="text-text3 hover:text-red"
-                      :title="locale.t('adminParents.revokeAccess', 'Снять доступ')" @click="unlink(l)">✕</button>
+              <IconButton v-if="l.status !== 'revoked'" icon="remove" tone="danger" :label="locale.t('adminParents.revokeAccess', 'Снять доступ')" @click="unlink(l)" />
             </td>
           </tr>
         </tbody>

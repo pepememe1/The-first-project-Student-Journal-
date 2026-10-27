@@ -34,7 +34,7 @@ function ok() {
 </script>
 
 <template>
-  <div v-if="shown" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4">
+  <div v-back-close="ok" v-if="shown" class="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4">
     <div class="w-full max-w-xs rounded-2xl border border-border2 bg-card p-6 text-center shadow-xl">
       <Timer class="mx-auto size-7 text-red" />
       <p class="mt-2 text-sm text-text2">{{ locale.t('timer.overTitle', 'Время вышло') }}</p>

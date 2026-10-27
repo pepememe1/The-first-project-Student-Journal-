@@ -34,6 +34,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { dayLabels, kindMap, weekButtonsFor, weekButtonLabelFor } from '@/config/scheduleView'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
 // ⚠️ Подписи дней и типов занятий переехали в `config/scheduleView.js` — их рисует ещё и
@@ -445,7 +446,7 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
     <div v-if="!modeChoice" class="flex flex-wrap items-center justify-between gap-2">
       <div v-if="categories.length > 1" class="flex flex-wrap gap-2">
         <button v-for="c in categories" :key="c.key"
-                class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors"
+                class="rounded-full border px-3 py-1.5 text-xs font-medium transition-colors pointer-coarse:py-2.5"
                 :class="category === c.key
                   ? 'border-accent bg-accent text-white'
                   : 'border-border2 bg-card2 text-text2 hover:border-accent/50'"
@@ -455,7 +456,7 @@ const modeChoice = computed(() => teacherChoice.value || studentChoice.value)
       </div>
       <button type="button" class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline"
               @click="mode = ''">
-        {{ locale.t('schedulePage.backToChoice', '← к выбору') }}
+        <GbIcon name="back" class="inline-block size-4 align-[-3px]" />{{ locale.t('schedulePage.backToChoice', 'к выбору') }}
       </button>
     </div>
 

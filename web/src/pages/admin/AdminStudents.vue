@@ -17,6 +17,8 @@ import { useLocaleStore } from '@/stores/locale'
 import RolloutDialog from '@/components/account/RolloutDialog.vue'
 import AccountExtraPanel from '@/components/account/AccountExtraPanel.vue'
 import { formatCollege } from '@/utils/collegeTime'
+import GbIcon from '@/components/ui/GbIcon.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -181,7 +183,10 @@ watch(pages, (n) => { if (page.value > n - 1) page.value = n - 1 })
 
 // Модалка создания/правки
 const showForm = ref(false)
-const editing = ref(null) // null = создание; иначе исходный login (ключ)
+const editing = ref(null) // null = создание; иначе исходный login (ключ) или id студента без логина
+// id студента без логина (stud:u:…): правка идёт по нему. Пустой логин раньше делал
+// `editing` ложным, и окно правки открывалось как «Добавить студента».
+const editingSid = ref(null)
 const form = ref({ surname: '', name: '', patronymic: '', login: '', group: '', password: '', birthday: '' })
 const saving = ref(false)
 const formError = ref('')
@@ -271,6 +276,7 @@ function openCreate() {
   showExtra.value = false
   lockedHeight.value = 0
   editing.value = null
+  editingSid.value = null
   form.value = { surname: '', name: '', patronymic: '', login: '', group: '', password: '', birthday: '' }
   formAtOpen = JSON.stringify(form.value)
   formError.value = ''
@@ -279,7 +285,8 @@ function openCreate() {
 function openEdit(r) {
   showExtra.value = false
   lockedHeight.value = 0
-  editing.value = r.login
+  editing.value = r.login || r.id
+  editingSid.value = r.login ? null : r.id
   //Имя и отчество — раздельно: сервер отдаёт first_name/patronymic (name — полная форма-ключ).
   form.value = {
     surname: r.surname, name: r.first_name ?? r.name, patronymic: r.patronymic ?? '',
@@ -358,13 +365,17 @@ async function save() {
   saving.value = true
   try {
     if (editing.value) {
-      await adminApi.updateStudent(editing.value, { surname: f.surname, name: f.name, patronymic: f.patronymic, group: f.group, password: f.password, birthday: f.birthday })
+      await adminApi.updateStudent(editingSid.value ? '' : editing.value,
+        { surname: f.surname, name: f.name, patronymic: f.patronymic, group: f.group, password: f.password, birthday: f.birthday },
+        editingSid.value || '')
     } else {
       await adminApi.createStudent({ surname: f.surname, name: f.name, patronymic: f.patronymic, login: f.login, group: f.group, password: f.password, birthday: f.birthday })
     }
     // Запись колледжа о контактах — после основного сохранения: при создании логина до
     // этого момента на сервере ещё нет. Отказ показывает сама панель, окно не закрываем.
-    if (extraRef.value && !(await extraRef.value.save(editing.value || f.login.trim()))) return
+    // У студента без логина контактов колледжа нет: их ключ — логин.
+    const extraLogin = editingSid.value ? '' : (editing.value || f.login.trim())
+    if (extraRef.value && extraLogin && !(await extraRef.value.save(extraLogin))) return
     showForm.value = false
     await reload()
   } catch (e) {
@@ -377,7 +388,7 @@ async function save() {
 async function del(r) {
   if (!(await confirmDelete({ kind: 'student', key: r.login,
     title: locale.t('adminStudents.confirmDelete', { name: `${r.surname} ${r.name}` }) }))) return
-  try { await adminApi.deleteStudent(r.login); await reload() }
+  try { await adminApi.deleteStudent(r.login, r.login ? '' : r.id); await reload() }
   catch (e) { toast.error(e?.response?.data?.detail || locale.t('adminStudents.deleteFailed', 'Не удалось удалить')) }
 }
 </script>
@@ -422,7 +433,7 @@ async function del(r) {
     <RolloutDialog v-if="showRollout" @close="showRollout = false" />
 
     <StickyXScroll class="rounded-lg border border-border bg-card shadow-card">
-      <table class="w-full text-sm">
+      <table class="gb-table-pin w-full text-sm">
         <thead>
           <tr class="border-b border-border2 bg-bg2 text-left text-tiny uppercase tracking-wide text-text2">
             <th class="px-4 py-2.5 font-semibold">{{ locale.t('adminStudents.colFullName', 'ФИО') }}</th>
@@ -449,10 +460,8 @@ async function del(r) {
             <td class="whitespace-nowrap px-4 py-2.5 text-text3" :title="r.device ? locale.t('adminStudents.deviceTitle', { device: r.device }) : ''">{{ fmtDT(r.last_login) }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-text3">{{ r.ip || '—' }}</td>
             <td class="whitespace-nowrap px-4 py-2.5 text-right">
-              <button type="button" class="mr-2 inline-grid size-8 place-items-center rounded-sm text-text3 hover:bg-accent-glow hover:text-accent"
-                      :title="locale.t('adminStudents.edit', 'Изменить')" :aria-label="locale.t('adminStudents.edit', 'Изменить')" @click="openEdit(r)">✎</button>
-              <button type="button" class="inline-grid size-8 place-items-center rounded-sm text-text3 hover:bg-red/10 hover:text-red"
-                      :title="locale.t('common.delete')" :aria-label="locale.t('common.delete')" @click="del(r)">✕</button>
+              <IconButton icon="edit" :label="locale.t('adminStudents.edit', 'Изменить')" @click="openEdit(r)" />
+              <IconButton icon="delete" tone="danger" :label="locale.t('common.delete')" @click="del(r)" />
             </td>
           </tr>
         </tbody>
@@ -467,7 +476,7 @@ async function del(r) {
     </div>
 
     <!-- Модалка создания/правки -->
-    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeForm">
+    <div v-dialog v-if="showForm" data-dialog-guard="self" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeForm">
       <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminStudents.editTitle', 'Изменить студента') : locale.t('adminStudents.addTitle', 'Добавить студента') }}</h3>
         <div ref="formBox" class="-mx-1 space-y-3 px-1" :class="lockedHeight ? 'overflow-y-auto' : ''"
@@ -519,8 +528,9 @@ async function del(r) {
                 <input v-model="form.password" :type="showPass ? 'text' : 'password'"
                        :placeholder="editing ? locale.t('adminStudents.passwordKeepPlaceholder', 'не менять') : locale.t('adminStudents.passwordNewPlaceholder', 'введите или нажмите ↻')"
                        class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
-                <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent" @click="showPass = !showPass">
-                  {{ showPass ? '🙈' : '👁' }}
+                <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent"
+                        :aria-label="showPass ? locale.t('login.hide', 'Скрыть') : locale.t('login.show', 'Показать')" @click="showPass = !showPass">
+                  <GbIcon :name="showPass ? 'hide' : 'show'" class="size-4" />
                 </button>
               </div>
               <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
@@ -547,7 +557,7 @@ async function del(r) {
           <!-- «Доп. данные» (4.0): стартовый пароль и сверка контактов. Раскрываются
                ВНУТРИ этой же прокрутки — окно не растёт. -->
           <div v-if="showExtra" ref="extraAnchor" class="border-t border-border pt-3">
-            <AccountExtraPanel ref="extraRef" :login="editing || ''" :is-admin="true" />
+            <AccountExtraPanel ref="extraRef" :login="editingSid ? '' : (editing || '')" :is-admin="true" />
           </div>
           <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>

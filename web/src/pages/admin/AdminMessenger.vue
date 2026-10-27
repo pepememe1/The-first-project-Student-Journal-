@@ -24,6 +24,7 @@ import { roleLabel } from '@/config/roles'
 import { profilePlate } from '@/theme/palette'
 import { formatCollege } from '@/utils/collegeTime'
 import { mediaSrc } from '@/utils/mediaSrc'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -254,8 +255,16 @@ async function reloadCurrent() {
   return loadPeople()
 }
 
-/** Заметка модерации: строка (можно пустую) или null, если человек нажал «Отмена». */
-function moderationNote() {
+/** Заметка модерации: строка (можно пустую) или null, если человек нажал «Отмена».
+ *  «Отклонить» тоже идёт через неё: раньше жалоба исчезала одним нажатием, без вопроса
+ *  и без причины (живой прогон 27.10.2026), а окно с «Отменой» и есть подтверждение. */
+function moderationNote(status = '') {
+  if (status === 'dismissed') {
+    return prompt({
+      title: locale.t('adminMessenger.dismissTitle', 'Отклонить жалобу?'),
+      message: locale.t('adminMessenger.dismissPrompt', 'Причина отклонения (необязательно) — её увидят модераторы:'),
+    })
+  }
   return prompt({
     title: locale.t('adminMessenger.noteTitle', 'Заметка модерации'),
     message: locale.t('adminMessenger.moderationNotePrompt', 'Заметка модерации (необязательно):'),
@@ -265,7 +274,7 @@ function moderationNote() {
 async function resolveUserReport(r, status) {
   //🔥 «Отмена» в окне заметки раньше НЕ отменяла: `prompt() || ''` превращал отказ в
   //пустую заметку, и жалоба закрывалась всё равно. Теперь отмена — это отмена.
-  const note = status === 'dismissed' ? '' : await moderationNote()
+  const note = await moderationNote(status)
   if (note === null) return
   try { await messengerModApi.resolveUserReport(r.id, status, note); await loadUserReports() }
   catch { toast.error(locale.t('adminMessenger.loadFailed', 'Не удалось загрузить.')) }
@@ -294,7 +303,7 @@ async function openHistory(user) {
 onMounted(load)
 
 async function resolve(r, status) {
-  const note = status === 'dismissed' ? '' : await moderationNote()
+  const note = await moderationNote(status)
   if (note === null) return        //«Отмена» отменяет решение, а не закрывает жалобу с пустой заметкой
   try { await messengerModApi.resolve(r.id, status, note); await load() }
   catch (e) { toast.error(e?.response?.data?.detail || locale.t('common.error', 'Не получилось')) }
@@ -368,6 +377,18 @@ function muteLeft(iso) {
 // дизейбл кнопки сам по себе обходится прямым запросом к API, поэтому это не защита,
 // а просто честная подсказка «сюда уже нельзя».
 function isReportOpen(r) { return r.status === 'open' || r.status === 'in_review' }
+// Статус жалобы словом: сервер отдаёт служебное `open`/`in_review`, и модератор видел его как есть.
+function reportStateText(status) {
+  const map = {
+    open: ['adminMessenger.stateOpen', 'новая'],
+    in_review: ['adminMessenger.stateInReview', 'в работе'],
+    resolved: ['adminMessenger.stateResolved', 'решена'],
+    dismissed: ['adminMessenger.stateDismissed', 'отклонена'],
+    expired: ['adminMessenger.stateExpired', 'истекла'],
+  }
+  const m = map[status]
+  return m ? locale.t(m[0], m[1]) : status
+}
 
 function takeWindow(data) {
   viewer.value.hasMore = Boolean(data?.has_more)
@@ -510,7 +531,7 @@ function fmt(iso) {
               {{ locale.t('adminMessenger.fromActivity', 'Отзыв на активности') }}
             </span>
             <span class="text-xs text-text3">{{ fmt(r.created_at) }}</span>
-            <span class="ml-auto text-xs text-text3">#{{ r.id }} · {{ r.status }}</span>
+            <span class="ml-auto text-xs text-text3">№{{ r.id }} · {{ reportStateText(r.status) }}</span>
           </div>
           <p class="rounded-md border border-border bg-bg2 px-3 py-2 text-sm text-text">«{{ r.message_snapshot }}»</p>
           <p v-if="r.description" class="mt-2 text-sm text-text2">{{ locale.t('adminMessenger.commentLabel', 'Комментарий:') }} {{ r.description }}</p>
@@ -653,7 +674,7 @@ function fmt(iso) {
       <div class="flex max-h-[80vh] w-full max-w-lg flex-col rounded-xl border border-border2 bg-card shadow-card">
         <div class="flex items-center justify-between border-b border-border p-4">
           <h3 class="font-title text-base font-bold text-text">{{ viewer.mode === 'inbox' ? locale.t('adminMessenger.supportRequestFallback', 'Обращение в поддержку') : locale.t('adminMessenger.conversationTitle', 'Переписка') }}</h3>
-          <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="viewer.open = false" class="text-text3 hover:text-text">✕</button>
+          <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="viewer.open = false" class="text-text3 hover:text-text"><GbIcon name="close" class="size-5" /></button>
         </div>
         <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-4">
           <p v-if="viewer.loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>

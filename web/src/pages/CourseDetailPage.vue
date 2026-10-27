@@ -5,8 +5,8 @@ import { ref, computed, onMounted } from 'vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  ArrowLeft, BookOpen, Paperclip, Link2, ClipboardList, Plus, Trash2, Archive,
-  Loader2, X, Users, FileText, Upload,
+  ChevronLeft, BookOpen, Paperclip, Link2, ClipboardList, Plus, Trash2, Archive, LoaderCircle,
+  X, Users, FileText, Upload,
 } from '@lucide/vue'
 import { coursesApi, messengerApi } from '@/api/endpoints'
 import { putSigned } from '@/utils/signedUpload'
@@ -159,10 +159,10 @@ async function archive() {
   <div>
     <button type="button" @click="router.push(`/${auth.role}/courses`)"
             class="mb-3 flex items-center gap-1.5 text-sm text-text2 transition-colors hover:text-accent">
-      <ArrowLeft class="size-4" /> {{ t('courses.back', 'К списку курсов') }}
+      <ChevronLeft class="size-4" /> {{ t('courses.back', 'К списку курсов') }}
     </button>
 
-    <div v-if="loading" class="grid place-items-center py-16 text-text3"><Loader2 class="size-6 animate-spin" /></div>
+    <div v-if="loading" class="grid place-items-center py-16 text-text3"><LoaderCircle class="size-6 animate-spin" /></div>
 
     <div v-else-if="notFound || !course" class="grid place-items-center gap-2 py-16 text-center text-text3">
       <X class="size-10 opacity-40" />
@@ -230,7 +230,7 @@ async function archive() {
                     <button type="button" @click="addMaterial(s.id)" class="h-8 rounded bg-accent px-2 text-xs font-semibold text-white hover:bg-accent2">{{ t('common.add', 'Добавить') }}</button>
                     <button type="button" :disabled="uploading" @click="pickFile(s.id)"
                             class="flex h-8 items-center gap-1 rounded border border-border2 px-2 text-xs text-text2 hover:border-accent hover:text-accent disabled:opacity-50">
-                      <Loader2 v-if="uploading" class="size-3.5 animate-spin" /><Upload v-else class="size-3.5" />{{ t('courses.addFile', 'Файл') }}
+                      <LoaderCircle v-if="uploading" class="size-3.5 animate-spin" /><Upload v-else class="size-3.5" />{{ t('courses.addFile', 'Файл') }}
                     </button>
                     <button :aria-label="loc.t('common.cancel', 'Отмена')" type="button" @click="matDraft.open = 0" class="grid size-8 place-items-center rounded text-text3 hover:text-text"><X class="size-4" /></button>
                   </div>
@@ -279,7 +279,7 @@ async function archive() {
             <button type="button" @click="addMaterial(-1)" class="h-8 rounded bg-accent px-2.5 text-xs font-semibold text-white hover:bg-accent2">{{ t('common.add', 'Добавить') }}</button>
             <button type="button" :disabled="uploading" @click="pickFile(-1)"
                     class="flex h-8 items-center gap-1 rounded border border-border2 px-2.5 text-xs text-text2 hover:border-accent hover:text-accent disabled:opacity-50">
-              <Loader2 v-if="uploading" class="size-3.5 animate-spin" /><Upload v-else class="size-3.5" />{{ t('courses.addFile', 'Файл') }}
+              <LoaderCircle v-if="uploading" class="size-3.5 animate-spin" /><Upload v-else class="size-3.5" />{{ t('courses.addFile', 'Файл') }}
             </button>
           </div>
         </div>

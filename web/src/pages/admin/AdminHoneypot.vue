@@ -12,13 +12,14 @@
 // ⚠️ Страна и провайдер — из ЛОКАЛЬНОЙ базы на сервере (ipgeo), название страны рисует
 // браузер (`Intl.DisplayNames`) на языке интерфейса — своего справочника стран нет.
 import { ref, computed, onMounted, watch } from 'vue'
-import { RefreshCw, Search, ShieldAlert, Radar, Copy, X, Cloud, Fingerprint } from '@lucide/vue'
+import { RotateCw, Search, ShieldAlert, Radar, Copy, X, Cloud, Fingerprint } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import Card from '@/components/ui/Card.vue'
 import StatCard from '@/components/ui/StatCard.vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { COLLEGE_UTC_OFFSET_MIN, formatCollege } from '@/utils/collegeTime'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
 const t = (k, f) => locale.t(k, f)
@@ -72,7 +73,7 @@ function countryName(cc) {
   try { return regionNames.value?.of(cc) || cc } catch { return cc }
 }
 function flag(cc) {
-  if (!cc || cc.length !== 2) return '🏳'
+  if (!cc || cc.length !== 2) return ''
   return String.fromCodePoint(...[...cc.toUpperCase()].map((c) => 0x1F1E6 + c.charCodeAt(0) - 65))
 }
 const CLOUD = ['GOOGLE', 'AMAZON', 'AWS', 'MICROSOFT', 'AZURE', 'DIGITALOCEAN', 'OVH', 'HETZNER',
@@ -144,7 +145,7 @@ async function openSource(fp) {
         </select>
         <button type="button" @click="reload" :disabled="loading"
                 class="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
-          <RefreshCw :size="14" :class="loading ? 'animate-spin' : ''" />
+          <RotateCw :size="14" :class="loading ? 'animate-spin' : ''" />
           {{ t('common.refresh', 'Обновить') }}
         </button>
       </div>
@@ -291,7 +292,7 @@ async function openSource(fp) {
                   <span :class="kindOf(h.tool_kind).cls" class="rounded border px-1">{{ h.tool }}</span>
                 </td>
                 <td class="py-1.5 font-mono text-text2">
-                  <span v-if="h.kind === 'honeytoken'" class="mr-1 text-red">🍯</span>{{ h.method }} {{ h.path }}<span v-if="h.query">?{{ h.query }}</span>
+                  <GbIcon v-if="h.kind === 'honeytoken'" name="honeypot" class="mr-1 inline-block size-4 align-[-3px] text-red" />{{ h.method }} {{ h.path }}<span v-if="h.query">?{{ h.query }}</span>
                 </td>
               </tr>
             </tbody>
@@ -336,7 +337,7 @@ async function openSource(fp) {
           </div>
           <div v-for="h in open.hits" :key="h.id" class="mt-3 rounded-xl border border-border p-3 text-xs">
             <p class="flex flex-wrap items-center justify-between gap-1">
-              <span class="font-mono font-semibold"><span v-if="h.kind === 'honeytoken'" class="text-red">🍯 </span>{{ h.method }} {{ h.path }}<span v-if="h.query">?{{ h.query }}</span></span>
+              <span class="font-mono font-semibold"><GbIcon v-if="h.kind === 'honeytoken'" name="honeypot" class="mr-1 inline-block size-4 align-[-3px] text-red" />{{ h.method }} {{ h.path }}<span v-if="h.query">?{{ h.query }}</span></span>
               <span class="text-text3">{{ when(h.created_ts) }}</span>
             </p>
             <p v-if="h.host" class="mt-1 text-text3">Host: {{ h.host }}</p>

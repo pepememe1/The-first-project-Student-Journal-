@@ -15,7 +15,7 @@
 // Чужой или несуществующий id сервер отдаёт как 404 — показываем «письмо не найдено».
 import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight, CalendarClock, SquareKanban } from '@lucide/vue'
+import { ChevronLeft, ArrowRight, CalendarClock, SquareKanban } from '@lucide/vue'
 import { meApi } from '@/api/endpoints'
 import { isStaleSession } from '@/api/responseOwner'
 import { useAuthStore } from '@/stores/auth'
@@ -120,7 +120,7 @@ const facts = computed(() => {
   <div class="mx-auto w-full max-w-3xl">
     <button type="button" @click="back"
             class="mb-3 inline-flex items-center gap-1.5 rounded-md px-1 py-1 text-sm text-text3 transition-colors hover:text-accent">
-      <ArrowLeft class="size-4" />{{ locale.t('notifications.backToList', 'К списку') }}
+      <ChevronLeft class="size-4" />{{ locale.t('notifications.backToList', 'К списку') }}
     </button>
 
     <p v-if="loading" class="py-10 text-center text-sm text-text3">{{ locale.t('notifications.loading', 'Загружаем…') }}</p>

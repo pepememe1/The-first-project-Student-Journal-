@@ -6,6 +6,7 @@
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const emit = defineEmits(['close'])
 
@@ -102,7 +103,7 @@ async function submit() {
 
       <template v-else>
         <div class="py-4 text-center">
-          <p class="text-3xl">📨</p>
+          <p class="flex justify-center text-accent"><GbIcon name="mailSent" class="size-10" /></p>
           <p class="mt-2 text-sm font-semibold text-text">Заявка отправлена!</p>
           <p class="mt-1 text-sm text-text3">Когда администратор её подтвердит, логин и пароль придут на <b class="text-text">{{ email }}</b>.</p>
           <AppButton variant="green" size="sm" class="mt-4" @click="emit('close')">Понятно</AppButton>

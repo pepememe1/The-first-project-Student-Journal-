@@ -4,7 +4,7 @@
 // входа по центру, карточка «фичи» справа. Адрес сервера НЕ спрашиваем (same-origin).
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Eye, EyeOff, Bot, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint, ShieldAlert, CalendarDays, HelpCircle, ArrowBigUp, Info } from '@lucide/vue'
+import { Eye, EyeOff, Globe, ShieldCheck, Trophy, Monitor, Smartphone, Download, Fingerprint, ShieldAlert, CalendarDays, CircleHelp, ArrowBigUp, Info } from '@lucide/vue'
 import { useAuthStore } from '@/stores/auth'
 import { RouterLink } from 'vue-router'
 import { useLocaleStore } from '@/stores/locale'
@@ -35,6 +35,7 @@ const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 import MfaPrompt from '@/components/auth/MfaPrompt.vue'
+import GbIcon from '@/components/ui/GbIcon.vue'
 const easter = useEasterStore()
 const loc = useLocaleStore()
 
@@ -132,9 +133,10 @@ const greetingDone = ref(false)
 // ответ стоял в ОДНОМ соединении HTTP/2 за мегабайтами картинок, клиент через 20 с писал
 // «проверьте соединение», человек нажимал ещё раз — четыре входа подряд. Приложению это
 // не грозило: его картинки лежат в самом приложении, по сети идут только мелкие ответы.
-// ⚠️ Граница — та же, что у класса `lg:` (Tailwind, 1024 px): разойдись они, маскот
-// пропал бы на широком экране или снова качался бы невидимым на узком.
-const WIDE_QUERY = '(min-width: 1024px)'
+// ⚠️ Граница — та же, что у класса `lg:` (`--breakpoint-lg` в style.css, 940 px): разойдись
+// они, маскот пропал бы на широком экране или снова качался бы невидимым на узком. До
+// 23.10.2026 здесь стояли стандартные 1024, и между 940 и 1024 колонка была пустой.
+const WIDE_QUERY = '(min-width: 940px)'
 const wideMq = typeof window !== 'undefined' ? window.matchMedia?.(WIDE_QUERY) : null
 const wideScreen = ref(!!wideMq?.matches)
 function onWideChange(e) { wideScreen.value = !!e.matches }
@@ -174,7 +176,11 @@ const loginAnim = computed(() => {
   return hovered.value ? 'thinking' : (greetingDone.value ? 'idle' : 'greeting')
 })
 
-const canSubmit = computed(() => login.value.trim() && password.value && !auth.loading)
+//Пустое поле — подсказка и курсор в него, а не серая «Войти» (живой прогон 23.10.2026:
+//серая кнопка не говорит пожилому человеку, чего не хватает, а пустое поле пароля с
+//точками-подсказкой выглядело уже заполненным).
+const emptyHint = ref('')
+watch([login, password], () => { emptyHint.value = '' })
 
 // ━━ ЧТО ПРОВЕРИТЬ, ЕСЛИ НЕ ВХОДИТ (13.10.2026) ━━
 // Пароль скрыт точками: набран ли он русскими буквами или заглавными, человек не видит.
@@ -282,6 +288,15 @@ const lockLabel = computed(() => {
 })
 
 async function submit() {
+  if (auth.loading) return
+  if (!login.value.trim() || !password.value) {
+    const field = login.value.trim() ? 'password' : 'login'
+    emptyHint.value = field === 'login'
+      ? loc.t('login.needLogin', 'Введите логин')
+      : loc.t('login.needPassword', 'Введите пароль')
+    document.getElementById(field)?.focus()
+    return
+  }
   needApproval.value = false
   try {
     const user = await auth.login(login.value, password.value,
@@ -457,7 +472,7 @@ function openRecover() {
            @mouseenter="onEnter" @mouseleave="hovered = false">
         <transition name="pop">
           <div v-if="hovered" class="absolute bottom-full left-1/2 mb-3 w-64 -translate-x-1/2 rounded-2xl border border-border2 bg-card px-4 py-3 shadow-card">
-            <p class="text-sm font-extrabold text-accent">💡 Совет Вектора</p>
+            <p class="flex items-center gap-1.5 text-sm font-extrabold text-accent"><GbIcon name="tip" class="size-4 shrink-0" />Совет Вектора</p>
             <p class="mt-1 text-sm font-semibold text-text">{{ tip }}</p>
             <div class="absolute -bottom-2 left-1/2 size-4 -translate-x-1/2 rotate-45 border-b border-r border-border2 bg-card" />
           </div>
@@ -480,13 +495,13 @@ function openRecover() {
              раньше кнопка появлялась только в кабинете, куда ещё надо попасть. -->
         <div class="relative mb-1 flex items-center justify-between gap-2">
           <button type="button"
-                  class="flex h-8 items-center gap-1.5 rounded-full border border-border2 px-3 text-xs font-semibold text-text2 transition-colors hover:border-accent hover:text-accent focus:border-accent focus:outline-none"
+                  class="flex h-8 items-center gap-1.5 rounded-full border border-border2 px-3 text-xs font-semibold text-text2 transition-colors pointer-coarse:h-11 pointer-coarse:text-sm hover:border-accent hover:text-accent focus:border-accent focus:outline-none"
                   :aria-expanded="showLoginHelp"
                   :aria-label="loc.t('login.helpAria', 'Как войти')"
                   @mouseenter="openLoginHelp" @mouseleave="closeLoginHelp(120)"
                   @focus="openLoginHelp" @blur="closeLoginHelp()"
                   @click="toggleLoginHelp">
-            <HelpCircle class="size-4" />{{ loc.t('login.helpButton', 'Как войти?') }}
+            <CircleHelp class="size-4" />{{ loc.t('login.helpButton', 'Как войти?') }}
           </button>
           <div class="flex items-center gap-1.5">
             <AccessibilityMenu placement="down" />
@@ -497,7 +512,7 @@ function openRecover() {
                карточку при каждом наведении — то самое «занимает место», от которого и
                уходили. -->
           <transition name="fade">
-            <div v-if="showLoginHelp"
+            <div v-back-close="closeLoginHelp" v-if="showLoginHelp"
                  class="absolute left-0 top-9 z-20 w-64 rounded-lg border border-border2 bg-card p-3 text-left shadow-card"
                  role="tooltip"
                  @mouseenter="openLoginHelp" @mouseleave="closeLoginHelp(120)">
@@ -572,11 +587,11 @@ function openRecover() {
               <input v-model="password" id="password" name="password" :type="showPass ? 'text' : 'password'" autocomplete="current-password"
                      autocapitalize="none" autocorrect="off" spellcheck="false"
                      @focus="onFieldFocus('password')" @keydown="onKey" @keyup="onKey"
-                     class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 pr-11 text-text outline-none transition-colors focus:border-accent focus:bg-card"
-                     placeholder="••••••••" />
-              <button type="button" class="absolute right-2 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
+                     class="h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 pr-12 text-text outline-none transition-colors focus:border-accent focus:bg-card"
+                     :placeholder="loc.t('login.passwordPlaceholder', 'Введите пароль')" />
+              <button type="button" class="absolute right-0 top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-sm text-text2 hover:text-accent"
                       :aria-label="showPass ? loc.t('login.hide') : loc.t('login.show')" @click="showPass = !showPass">
-                <EyeOff v-if="showPass" class="size-4" /><Eye v-else class="size-4" />
+                <EyeOff v-if="showPass" class="size-5" /><Eye v-else class="size-5" />
               </button>
             </div>
             <p v-if="capsOn" role="status" class="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-orange">
@@ -622,7 +637,8 @@ function openRecover() {
             </label>
           </Transition>
 
-          <AppButton type="submit" class="w-full" :disabled="!canSubmit">
+          <p v-if="emptyHint" role="alert" class="text-sm font-medium text-orange">{{ emptyHint }}</p>
+          <AppButton type="submit" class="w-full" :disabled="auth.loading">
             {{ auth.loading ? loc.t('login.submitting') : loc.t('login.submit') }}
           </AppButton>
           <p v-if="slowLogin && auth.loading" class="text-center text-tiny text-text3" role="status">
@@ -683,7 +699,7 @@ function openRecover() {
              ⚠️ ВЫКЛЮЧЕНА, см. `SYNC_SERVER_BUTTON_ENABLED` — код оставлен намеренно. -->
         <div v-if="SYNC_SERVER_BUTTON_ENABLED" class="mt-3 text-center">
           <button type="button" class="text-tiny text-text3 transition-colors hover:text-accent" @click="router.push('/connect')">
-            ⚙ Сервер синхронизации
+            <GbIcon name="settings" class="inline-block size-4 align-[-3px]" /> Сервер синхронизации
           </button>
         </div>
 
@@ -749,7 +765,7 @@ function openRecover() {
           Электронный журнал с ИИ-помощником «Вектор»: оценки, средний балл, долги и пропуски — понятно и под рукой.
         </p>
         <ul class="mt-5 space-y-3 text-sm">
-          <li class="flex items-center gap-3 text-text"><Bot class="size-5 text-accent" /> ИИ-помощник «Вектор»</li>
+          <li class="flex items-center gap-3 text-text"><GbIcon name="vector" class="size-5 text-accent" /> ИИ-помощник «Вектор»</li>
           <li class="flex items-center gap-3 text-text"><Globe class="size-5 text-accent" /> Работает на всех устройствах</li>
           <li class="flex items-center gap-3 text-text"><ShieldCheck class="size-5 text-accent" /> Безопасно — по 152-ФЗ</li>
         </ul>

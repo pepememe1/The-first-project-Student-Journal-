@@ -33,7 +33,7 @@ export function formatSystemMessage(body) {
       ? t('messagePreview.avatarChanged', 'Аватарка беседы обновлена')
       : t('messagePreview.avatarRemoved', 'Аватарка беседы убрана')
   }
-  if (type === 'pin_added') return t('messagePreview.pinAdded', '📌 Сообщение закреплено')
+  if (type === 'pin_added') return t('messagePreview.pinAdded', 'Сообщение закреплено')
   if (type === 'pin_removed') return t('messagePreview.pinRemoved', 'Сообщение откреплено')
   //§ролей: /mute и /clear тоже постят системную строку — тот же приём, что «вступил/вышел».
   if (type === 'muted' || type === 'unmuted') {
@@ -93,7 +93,7 @@ export function messagePreview(msg, opts = {}) {
   //Кнопка отчёта несёт в теле только id («rpt:К75/1|3») — показывать его человеку нечего.
   else if (msg.kind === 'report') {
     const seq = msg.report?.seq
-    text = seq ? t('messagePreview.reportWithSeq', { seq, group: msg.report.group || '' }).trim() : t('messagePreview.reportNoSeq', '📊 Отчёт по группе')
+    text = seq ? t('messagePreview.reportWithSeq', { seq, group: msg.report.group || '' }).trim() : t('messagePreview.reportNoSeq', 'Отчёт по группе')
   }
   //GIF (Klipy) — тело сообщения это прямая ссылка на CDN, показывать её человеку в
   //списке чатов нечего (та же логика, что у отчёта выше).
@@ -103,13 +103,15 @@ export function messagePreview(msg, opts = {}) {
   // превью не знало. Найдено Полковником 25.08.2026.
   else if (msg.kind === 'file') {
     const name = msg.attachment?.name || ''
-    text = (msg.body || '').trim() || (name ? `📎 ${name}` : t('messagePreview.file', 'Файл'))
+    text = (msg.body || '').trim() || (name || t('messagePreview.file', 'Файл'))
   }
   //Активность и сохранённая доска — тот же случай: в теле лежит только id («act:6de1…»),
   //и он уезжал в список чатов как есть. Название категории берём из ТОГО ЖЕ словаря
   //`activity.kind.*`, которым подписаны карточки в ленте, — второй копии названий не
   //заводим, иначе они разъедутся при добавлении новой категории.
-  else if (msg.kind === 'activity') {
+  //Опрос пишется своим видом `poll` (activities.py::_KIND_OF_FEED_MESSAGE), и без него
+  //в списке чатов стояло «Вы: act:dd54fbe…» (живой прогон 23.10.2026).
+  else if (msg.kind === 'activity' || msg.kind === 'poll') {
     const kind = msg.activity?.kind
     const cat = kind ? t(`activity.kind.${kind}`, '') : ''
     const title = (msg.activity?.title || '').trim()
@@ -119,7 +121,7 @@ export function messagePreview(msg, opts = {}) {
   }
   else if (msg.kind === 'board') {
     const title = (msg.board?.title || '').trim()
-    text = t('messagePreview.board', '🖉 Доска')
+    text = t('messagePreview.board', 'Доска')
     if (title) text += ` · ${title}`
   }
   else text = stripMarkup(msg.body)

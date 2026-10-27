@@ -14,7 +14,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import {
   X, Save, Undo2, Plus, Search, SquareKanban, List, ChartGantt, ChartPie, Settings2,
-  TriangleAlert, RefreshCw, Archive,
+  TriangleAlert, RotateCw, Archive,
 } from '@lucide/vue'
 import { useTrackerStore } from '@/stores/tracker'
 import { useConfirm } from '@/composables/useConfirm'
@@ -151,7 +151,7 @@ const skippedText = (s) => {
   <!-- `@click.self` нужен ради Esc: директива окна «щёлкает мимо», и срабатывает тот же
        вопрос про несохранённое, что и у крестика. Самой подложки не видно — окно во весь
        экран. -->
-  <div v-dialog class="fixed inset-0 z-50 flex flex-col bg-bg" @click.self="requestClose"
+  <div v-dialog data-dialog-guard="self" class="fixed inset-0 z-50 flex flex-col bg-bg" @click.self="requestClose"
        style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom)">
     <!-- ── шапка ─────────────────────────────────────────────────────────────────── -->
     <header class="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-2 sm:px-4">
@@ -192,7 +192,7 @@ const skippedText = (s) => {
       <button type="button" class="shrink-0 underline" @click="tracker.error = ''">{{ L.t('common.close') }}</button>
     </div>
     <div v-if="tracker.remoteChanged" class="flex shrink-0 items-center gap-2 border-b border-border bg-accent-glow px-4 py-2 text-sm text-text2">
-      <RefreshCw class="size-4 shrink-0 text-accent" /><span class="min-w-0 flex-1">{{ L.t('tracker.remoteChanged') }}</span>
+      <RotateCw class="size-4 shrink-0 text-accent" /><span class="min-w-0 flex-1">{{ L.t('tracker.remoteChanged') }}</span>
       <button type="button" class="shrink-0 text-accent underline" @click="tracker.remoteChanged = false">{{ L.t('common.ok') }}</button>
     </div>
     <div v-if="tracker.skipped.length" class="shrink-0 border-b border-orange/30 bg-orange/10 px-4 py-2 text-sm text-text2" role="status">

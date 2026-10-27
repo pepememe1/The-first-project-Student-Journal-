@@ -471,7 +471,7 @@ async function removeTask() {
               </span>
               <span v-if="!(task.assignees || []).length" class="px-1 text-sm text-text3">{{ L.t('tracker.noAssignee') }}</span>
             </button>
-            <div v-if="peopleOpen" class="fixed inset-0 z-10" @click="peopleOpen = false" />
+            <div v-back-close v-if="peopleOpen" class="fixed inset-0 z-10" @click="peopleOpen = false" />
             <div v-if="peopleOpen" class="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-y-auto rounded-lg border border-border2 bg-card p-1 shadow-card">
               <label class="mb-1 flex items-center gap-1.5 rounded-md border border-border2 px-2 py-1">
                 <Search class="size-3.5 text-text3" />

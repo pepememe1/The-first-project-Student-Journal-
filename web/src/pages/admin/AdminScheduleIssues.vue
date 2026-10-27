@@ -9,7 +9,7 @@
 // создавала уведомление, одна незакрытая накладка за неделю превратилась бы в сотню
 // одинаковых записей, и центр проблем перестали бы открывать.
 import { ref, computed, onMounted } from 'vue'
-import { AlertTriangle, CheckCircle2, Users, DoorClosed, Loader } from '@lucide/vue'
+import { TriangleAlert, CircleCheck, Users, DoorClosed, LoaderCircle } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -93,7 +93,7 @@ async function markJoint(c) {
     <!-- Сводка: то самое «у вас N проблем по расписанию». -->
     <Card>
       <div class="flex items-center gap-3">
-        <component :is="count ? AlertTriangle : CheckCircle2"
+        <component :is="count ? TriangleAlert : CircleCheck"
                    class="size-6 shrink-0" :class="count ? 'text-red' : 'text-accent'" />
         <div class="min-w-0">
           <p class="font-title text-lg font-extrabold" :class="count ? 'text-red' : 'text-text'">
@@ -153,7 +153,7 @@ async function markJoint(c) {
 
     <Card v-else-if="building">
       <div class="flex items-center gap-3 text-sm text-text3">
-        <Loader class="size-4 shrink-0 animate-spin" />
+        <LoaderCircle class="size-4 shrink-0 animate-spin" />
         {{ locale.t('adminScheduleIssues.buildingEmptyHint', 'Пока расписание не собрано, показывать нечего. Это не значит, что накладок нет.') }}
       </div>
     </Card>

@@ -206,6 +206,18 @@ def student_stats(year: str = Query(""), semester: int = Query(0),
     }
 
 
+# Имя значка карточки в общем словаре интерфейса (web/src/config/icons.js). Эмодзи в
+# поле icon остаётся для сборок до 27.10.2026: они рисуют его текстом.
+_CARD_ICON_NAMES = {"⚠️": "warn", "📅": "calendar", "🕒": "hours", "🎉": "celebrate",
+                    "🚨": "alert", "🎓": "risk", "✅": "ok", "📊": "report"}
+
+
+def _with_icon_names(cards: list) -> list:
+    for c in cards:
+        c["icon_name"] = _CARD_ICON_NAMES.get(c.get("icon"), "info")
+    return cards
+
+
 @router.get("/student/insights")
 def student_insights(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Проактивные карточки Вектора для студента (порт vector/insights.py, личный
@@ -249,9 +261,9 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
                       "detail": f"Всего {a['всего']} ч (Н: {a['Н']}, Б: {a['Б']}, О: {a['О']}).",
                       "action": "Не пропускайте ближайшие пары"})
 
-    if avg >= 4.5:
+    if W.grading.mark_of_average(avg) == 5:     #порог «отлично» — из grading (§4.44)
         cards.append({"severity": "info", "icon": "🎉", "title": "Отличная успеваемость",
-                      "detail": f"Средний балл {avg} — так держать!"})
+                      "detail": f"Средний балл {avg} — это уровень «отлично»."})
     elif 0 < avg < 3:
         cards.append({"severity": "alert", "icon": "🚨", "title": "Средний ниже 3",
                       "detail": f"Сейчас {avg}. Есть риск задолженностей по итогам.",
@@ -278,10 +290,10 @@ def student_insights(user: User = Depends(get_current_user), db: Session = Depen
 
     if not cards:
         cards.append({"severity": "info", "icon": "✅", "title": "Всё в порядке",
-                      "detail": "Долгов и тревожных сигналов нет — так держать!"})
+                      "detail": "Долгов и тревожных сигналов нет."})
     #risk отдаём отдельным полем (а не только карточкой): интерфейсу нужен уровень для
     #цвета/иконки, а разбирать его обратно из текста карточки — верный способ разъехаться.
-    return {"cards": cards, "mood": _mood_by_avg(avg),
+    return {"cards": _with_icon_names(cards), "mood": _mood_by_avg(avg),
             "risk": risk if risk["visible"] else None}
 
 
@@ -363,4 +375,4 @@ def teacher_insights(group: str = Query(...),
     if not cards:
         cards.append({"severity": "info", "icon": "✅", "title": "Всё спокойно",
                       "detail": f"По группе {group} тревожных сигналов нет."})
-    return {"cards": cards}
+    return {"cards": _with_icon_names(cards)}

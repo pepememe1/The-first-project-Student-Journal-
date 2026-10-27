@@ -13,6 +13,9 @@ import { useLocaleStore } from '@/stores/locale'
 import haptics from '@/utils/haptics'
 
 const emit = defineEmits(['text', 'error'])
+//Подпись рядом со значком. Где кнопка стоит среди других полей (журнал), один значок
+//микрофона без слова не объясняет, что он делает (живой прогон 23.10.2026).
+const props = defineProps({ label: { type: String, default: '' } })
 
 //Настройки устройства: тумблер и выбранный микрофон (см. `stores/voice.js`).
 const voice = useVoiceStore()
@@ -94,13 +97,15 @@ async function toggle() {
   <button v-if="visible" type="button" @click="toggle" :disabled="busy"
           :aria-label="recording ? locale.t('micButton.stopRecording', 'Остановить запись') : locale.t('micButton.voiceInput', 'Голосовой ввод')"
           :title="!ready ? reason : (recording ? locale.t('micButton.stopAndRecognize', 'Остановить и распознать') : locale.t('micButton.speak', 'Сказать голосом'))"
-          class="grid size-11 shrink-0 place-items-center rounded-sm border transition-colors disabled:opacity-50"
-          :class="recording
-            ? 'animate-pulse border-red bg-red/15 text-red'
-            : (ready
-              ? 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'
-              : 'border-border2 bg-card2 text-text3 opacity-60')">
+          class="shrink-0 rounded-sm border transition-colors disabled:opacity-50"
+          :class="[props.label ? 'inline-flex h-11 items-center gap-2 px-3 text-sm font-medium' : 'grid size-11 place-items-center',
+            recording
+              ? 'animate-pulse border-red bg-red/15 text-red'
+              : (ready
+                ? 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'
+                : 'border-border2 bg-card2 text-text3 opacity-60')]">
     <Square v-if="recording" class="size-4" />
     <Mic v-else class="size-5" />
+    <span v-if="props.label">{{ props.label }}</span>
   </button>
 </template>

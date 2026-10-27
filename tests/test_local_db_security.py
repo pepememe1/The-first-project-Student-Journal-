@@ -610,3 +610,49 @@ def test_migration_still_happens_after_a_plaintext_open(tmp_path):
     assert local_db.is_plaintext(p), "до миграции файл обязан оставаться открытым"
     assert local_db.encrypt_in_place(p, KEY) is True
     assert not local_db.is_plaintext(p), "после миграции файл обязан быть зашифрован"
+
+
+# ── 8. Пропавший ключ устройства не запирает программу ─────────────────────────────
+
+def test_database_under_a_lost_key_is_set_aside_and_the_program_starts(monkeypatch, tmp_path):
+    """Файл ключа пропал (22.10.2026, чистка AppData), программа завела новый ключ, а
+    служебная база, зашифрованная прежним, им не открывается. Запуск падал на первом
+    CREATE TABLE («hmac check failed», MemoryError), и починить мог только человек,
+    полезший в папку руками.
+
+    Обратный ход: уберите `set_aside_unreadable` из `DBManager.init` — краснеет."""
+    from data import core
+    db = str(tmp_path / "vsgutu_grades.db")
+    _make_plain(db)
+    assert local_db.encrypt_in_place(db, KEY)
+    new_key = "b" * 64
+    monkeypatch.setattr(core, "LOCAL_DB", db)
+    monkeypatch.setattr(core, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(core, "_db_key", lambda: new_key)
+
+    core.DBManager.init()
+
+    saved = list(tmp_path.glob("vsgutu_grades.db.unreadable-*"))
+    assert len(saved) == 1, "прежняя база обязана сохраниться под другим именем"
+    assert local_db.opens(str(saved[0]), KEY), "отложенный файл открывается прежним ключом"
+    conn = local_db.connect(db, new_key)
+    try:
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+    finally:
+        conn.close()
+    assert {"kv_store", "grades"} <= tables
+    assert not local_db.is_plaintext(db), "новая база тоже под ключом"
+
+
+def test_readable_database_is_never_set_aside(tmp_path):
+    db = str(tmp_path / "a.db")
+    _make_plain(db)
+    #Открытый файл с ключом служебной базе подходит: его зашифрует миграция.
+    assert local_db.set_aside_unreadable(db, KEY) == []
+    #А копии локального сервера — нет: серверный пакет на нём падает.
+    assert local_db.opens(db, KEY, plain_migrates=False) is False
+    local_db.encrypt_in_place(db, KEY)
+    assert local_db.set_aside_unreadable(db, KEY) == []
+    assert local_db.set_aside_unreadable(db, KEY, plain_migrates=False) == []
+    assert not list(tmp_path.glob("*.unreadable-*"))

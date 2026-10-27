@@ -13,6 +13,7 @@ import { X, Plus, Trash2, Copy } from '@lucide/vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { activitiesApi } from '@/api/endpoints'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const props = defineProps({ quizId: { type: String, default: '' },
                             kind: { type: String, default: 'quiz' } })
@@ -118,7 +119,7 @@ async function copySelf() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-3"
+  <div v-back-close class="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-3"
        @click.self="emit('close')">
     <div class="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border2 bg-card shadow-xl">
       <div class="flex items-center gap-2 border-b border-border2 px-4 py-3">
@@ -202,9 +203,10 @@ async function copySelf() {
             <div v-for="(o, oi) in q.options" :key="oi" class="flex min-w-0 items-center gap-2">
               <button v-if="q.type === 'single' || q.type === 'multi'" type="button"
                       @click="markCorrect(q, oi)" :disabled="!canEdit"
+                      :aria-label="locale.t('quiz.markCorrect', 'Верный ответ')" :aria-pressed="!!o.is_correct"
                       class="size-5 shrink-0 rounded border text-xs font-bold leading-5"
                       :class="o.is_correct ? 'border-accent bg-accent text-white' : 'border-border2 bg-card text-text3'">
-                {{ o.is_correct ? '✓' : '' }}
+                <GbIcon v-if="o.is_correct" name="confirm" class="size-3.5" />
               </button>
               <span v-else-if="q.type === 'order'"
                     class="size-5 shrink-0 rounded-full bg-accent text-center text-xs font-bold leading-5 text-white">

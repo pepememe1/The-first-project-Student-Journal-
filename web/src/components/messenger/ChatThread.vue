@@ -5,10 +5,10 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
-  Send, ArrowLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, LifeBuoy,
-  Bold, Italic, Underline, Strikethrough, Code, Quote, ChevronDown, History,
-  Search, Zap, MessageSquare, Eye, Plus, ScrollText, Check, CheckCheck, Clock, PieChart,
-  Languages, Star, SmilePlus, ClipboardList, Paperclip, MoreVertical, Pencil, SquareKanban,
+  Send, ChevronLeft, Pin, X, Reply as ReplyIcon, Forward, Trash2, LifeBuoy, Bold, Italic,
+  Underline, Strikethrough, Code, Quote, ChevronDown, History, Search, Zap, MessageSquare, Eye,
+  Plus, ScrollText, Check, CheckCheck, Clock, PieChart, Languages, Star, SmilePlus,
+  ClipboardList, Paperclip, EllipsisVertical, Pencil, SquareKanban,
 } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { useMessengerStore } from '@/stores/messenger'
@@ -65,8 +65,11 @@ import { useActivityStore } from '@/stores/activity'
 import TimerStrip from '@/components/activity/timer/TimerStrip.vue'
 import PollMessage from '@/components/activity/poll/PollMessage.vue'
 import { mediaSrc } from '@/utils/mediaSrc'
+import GbIcon from '@/components/ui/GbIcon.vue'
+import { useToast } from '@/composables/useToast'
 
 const locale = useLocaleStore()
+const toast = useToast()
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 const m = useMessengerStore()
 const tr = useTranslateStore()
@@ -915,8 +918,8 @@ const SLASH_COMMANDS = computed(() => [
   {
     cmd: '/vector',
     hint: isSaved.value
-      ? locale.t('chatThread.cmd.vectorHintSaved', 'Спросить ИИ-помощника — например: /vector когда экзамен по физике? Дальше отвечайте на его сообщения — префикс больше не нужен.')
-      : locale.t('chatThread.cmd.vectorHintChat', 'Спросить ИИ-помощника — ответ увидите только вы, в переписке он не останется.'),
+      ? locale.t('chatThread.cmd.vectorHintSaved', 'Спросить Вектора — например: /vector когда экзамен по физике? Дальше отвечайте на его сообщения — префикс больше не нужен.')
+      : locale.t('chatThread.cmd.vectorHintChat', 'Спросить Вектора — ответ увидите только вы, в переписке он не останется.'),
     ok: true,
     why: '',
   },
@@ -1301,7 +1304,13 @@ async function applyDelete(scope) {
 async function onReportSubmit(reason, description) {
   const msg = reportMsg.value
   reportMsg.value = null
-  if (msg) await m.reportMessage(msg.id, reason, description)
+  if (!msg) return
+  // Окно закрывается сразу, поэтому итог говорим тостом: раньше жалоба уходила молча.
+  if (await m.reportMessage(msg.id, reason, description)) {
+    toast.success(locale.t('report.messageSent', 'Жалоба отправлена — модератор её рассмотрит.'))
+  } else {
+    toast.error(locale.t('report.failed', 'Жалобу отправить не удалось — попробуйте ещё раз.'))
+  }
 }
 
 async function onForwardSubmit(convIds) {
@@ -1822,10 +1831,10 @@ function openActivities() {
       <!-- Шапка — в цвет плашки собеседника (её выбирает он сам в профиле). -->
       <div v-if="!selectionMode" class="flex h-14 shrink-0 items-center gap-3 border-b border-border px-3"
            :class="headerTint ? '' : 'bg-card'" :style="headerTint ? { background: headerTint } : {}">
-        <button type="button" @click="m.clearActive()" :aria-label="locale.t('chatThread.back', 'Назад')"
-                class="grid size-8 place-items-center rounded-md hover:bg-black/10 sm:hidden"
+        <button v-back-close type="button" @click="m.clearActive()" :aria-label="locale.t('chatThread.back', 'Назад')"
+                class="grid size-8 pointer-coarse:size-11 place-items-center rounded-md hover:bg-black/10 sm:hidden"
                 :class="headerTint ? 'text-white' : 'text-text2'">
-          <ArrowLeft class="size-5" />
+          <ChevronLeft class="size-5" />
         </button>
         <!-- Трекер задач — в ЛЕВОМ верхнем углу беседы, у каждого участника. На телефоне
              стоит сразу за стрелкой «назад». Кнопки нет, пока владелец не включил трекер:
@@ -1862,7 +1871,7 @@ function openActivities() {
           <button type="button" @click="showTranslate = true"
                   :aria-label="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('translate.title', 'Перевод')"
                   :title="tr.enabled ? locale.t('chatThread.autoTranslateOn', 'Автоперевод включён') : locale.t('chatThread.configureTranslate', 'Настроить перевод')"
-                  class="grid size-8 shrink-0 place-items-center rounded-md"
+                  class="grid size-8 pointer-coarse:size-11 shrink-0 place-items-center rounded-md"
                   :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                     : (tr.enabled ? 'text-accent hover:bg-bg2' : 'text-text3 hover:bg-bg2 hover:text-text')">
             <Languages class="size-5" />
@@ -1898,7 +1907,7 @@ function openActivities() {
           <!-- ⚙ — открыть чат с модерацией (см. MESSENGER-PLAN.md §6) -->
           <button v-if="!isModeration && !isAdmin" type="button" @click="m.openModeration()"
                   :aria-label="locale.t('nav.moderation', 'Модерация')" :title="locale.t('chatThread.writeToModeration', 'Написать модерации')"
-                  class="grid size-8 shrink-0 place-items-center rounded-md"
+                  class="grid size-8 pointer-coarse:size-11 shrink-0 place-items-center rounded-md"
                   :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                     : 'text-text3 hover:bg-bg2 hover:text-text'">
             <LifeBuoy class="size-5" />
@@ -1916,14 +1925,14 @@ function openActivities() {
                   class="relative grid size-8 place-items-center rounded-md"
                   :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white'
                     : 'text-text3 hover:bg-bg2 hover:text-text'">
-            <MoreVertical class="size-5" />
+            <EllipsisVertical class="size-5" />
             <span v-if="canOpenActivities && activity.unseen"
                   class="absolute -right-0.5 -top-0.5 grid size-4 place-items-center rounded-full bg-red text-[10px] font-bold leading-none text-white">!</span>
           </button>
           <!-- Подложка закрывает меню кликом мимо. Отдельным элементом, а не слушателем на
                документе: слушатель надо снимать при размонтировании, и забытый снимок —
                обычный источник «меню закрывается от клика в другом чате». -->
-          <div v-if="headerMenu" class="fixed inset-0 z-20" @click="closeHeaderMenu()"></div>
+          <div v-back-close v-if="headerMenu" class="fixed inset-0 z-20" @click="closeHeaderMenu()"></div>
           <div v-if="headerMenu"
                class="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-lg border border-border2 bg-card py-1 shadow-card">
             <button type="button" @click="closeHeaderMenu(); showTranslate = true"
@@ -1949,8 +1958,8 @@ function openActivities() {
         </div>
       </div>
       <div v-else class="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-3">
-        <button type="button" @click="m.clearSelection()" :aria-label="locale.t('common.cancel')"
-                class="grid size-8 place-items-center rounded-md text-text2 hover:bg-bg2"><X class="size-5" /></button>
+        <button v-back-close type="button" @click="m.clearSelection()" :aria-label="locale.t('common.cancel')"
+                class="grid size-8 pointer-coarse:size-11 place-items-center rounded-md text-text2 hover:bg-bg2"><X class="size-5" /></button>
         <span class="flex-1 text-sm font-semibold text-text">{{ locale.t('chatThread.selectedCount', { n: selectedIds.length }) }}</span>
         <!-- «Выбрать всё / Снять всё» — иначе выделять пачку приходилось по одному. -->
         <button type="button" @click="allSelected ? m.selectNone() : m.selectAll()"
@@ -1965,7 +1974,7 @@ function openActivities() {
 
       <!-- Поиск внутри чата: строка + результаты (без встроенного скролла к старым — если
            сообщение уже не подгружено в ленту, просто показываем его текст здесь). -->
-      <div v-if="showSearch" class="shrink-0 border-b border-border bg-card">
+      <div v-if="showSearch" v-back-close="closeSearchPanel" class="shrink-0 border-b border-border bg-card">
         <div class="flex items-center gap-2 px-3 py-2">
           <Search class="size-4 shrink-0 text-text3" />
           <input v-model="searchQ" @input="onSearchInput" autofocus :placeholder="locale.t('chatThread.searchByMeaning', 'Поиск по смыслу…')"
@@ -2101,7 +2110,7 @@ function openActivities() {
           </div>
 
           <div v-else :id="`gb-msg-${msg.id}`"
-               class="flex items-end gap-2"
+               class="group/msg flex items-end gap-2"
                :class="[msg.mine ? 'justify-end' : 'justify-start',
                         runStarts.has(msg.id) ? 'mt-4 first:mt-0' : 'mt-0.5']">
             <input v-if="selectionMode" type="checkbox" :checked="selectedIds.includes(msg.id)"
@@ -2125,6 +2134,18 @@ function openActivities() {
             </div>
             <!-- div, а не button: внутри есть свои интерактивные элементы (реакции) —
                  кнопка-в-кнопке невалидна. Жесты (клик/ПКМ/тач) не завязаны на семантику тега. -->
+            <!-- Действия с сообщением на ПК — видимой кнопкой при наведении, а не только правым
+                 кликом: о ПКМ на сайте никто не догадывается (живой прогон 27.10.2026). Своё
+                 сообщение — кнопка слева от пузыря, чужое — справа. На телефоне есть долгое
+                 нажатие, кнопка там не нужна. -->
+            <button v-if="!selectionMode" type="button"
+                    class="mb-1 grid size-8 shrink-0 place-items-center rounded-full text-text3 opacity-0 transition-opacity hover:bg-bg2 hover:text-text focus-visible:opacity-100 group-hover/msg:opacity-100 pointer-coarse:hidden"
+                    :class="msg.mine ? '' : 'order-last'"
+                    :title="locale.t('chatThread.messageActions', 'Действия с сообщением')"
+                    :aria-label="locale.t('chatThread.messageActions', 'Действия с сообщением')"
+                    @click="(e) => { const r = e.currentTarget.getBoundingClientRect(); openMenu(msg, r.left, r.bottom) }">
+              <GbIcon name="more" class="size-4" />
+            </button>
             <div role="button" tabindex="0" @click="onMessageClick(msg)"
                  @keydown.enter="onMessageClick(msg)"
                  @contextmenu="onContextMenu(msg, $event)"
@@ -2343,7 +2364,7 @@ function openActivities() {
       <transition name="fade">
         <button v-if="mentionMessageId" type="button" @click="jumpToMention"
                 :aria-label="locale.t('chatThread.mentionJumpAria', 'К сообщению, где вас отметили')" :title="locale.t('chatThread.mentionJumpTitle', 'Вас отметили — перейти')"
-                class="absolute bottom-16 right-3 grid size-10 place-items-center rounded-full border text-lg font-bold shadow-card"
+                class="absolute bottom-16 right-3 grid size-10 pointer-coarse:size-11 place-items-center rounded-full border text-lg font-bold shadow-card"
                 :class="mentionLoud
                   ? 'border-red/50 bg-red text-white hover:opacity-90'
                   : 'border-border2 bg-card text-accent hover:bg-bg2'">
@@ -2356,7 +2377,7 @@ function openActivities() {
       <transition name="fade">
         <button v-if="showScrollBtn" type="button" @click="scrollDown"
                 :aria-label="locale.t('chatThread.toLastMessages', 'К последним сообщениям')"
-                class="absolute bottom-3 right-3 grid size-10 place-items-center rounded-full border border-border2 bg-card shadow-card hover:bg-bg2">
+                class="absolute bottom-3 right-3 grid size-10 pointer-coarse:size-11 place-items-center rounded-full border border-border2 bg-card shadow-card hover:bg-bg2">
           <ChevronDown class="size-5 text-text2" />
           <span v-if="activeChat?.unread" class="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">
             {{ activeChat.unread }}
@@ -2530,7 +2551,7 @@ function openActivities() {
             </button>
             <span v-if="uploadPct" class="shrink-0 text-[11px] tabular-nums text-text3">{{ uploadPct }}%</span>
             <button v-else type="button" class="shrink-0 text-text3 hover:text-red"
-                    :aria-label="locale.t('common.remove', 'Убрать')" @click="pendingFile = null">✕</button>
+                    :aria-label="locale.t('common.remove', 'Убрать')" @click="pendingFile = null"><GbIcon name="remove" class="size-3.5" /></button>
           </div>
 
           <form class="relative flex items-end gap-2 p-2.5" @submit.prevent="pendingFile ? sendPendingFile() : submit()">
@@ -2546,14 +2567,14 @@ function openActivities() {
               <button type="button" @click="plusMenu = !plusMenu" :disabled="mascotCooldown.active"
                       :title="locale.t('chatThread.attachMenu', 'Прикрепить')"
                       :aria-label="locale.t('chatThread.attachMenu', 'Прикрепить')"
-                      class="grid size-10 place-items-center rounded-lg border border-border2 text-text3
+                      class="grid size-10 pointer-coarse:size-11 place-items-center rounded-lg border border-border2 text-text3
                              transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
                       :class="{ 'border-accent text-accent': plusMenu }">
                 <Plus class="size-5" />
               </button>
               <!-- Подложка: клик мимо закрывает. Меню открывается ВВЕРХ — под кнопкой у
                    композера места нет никогда, он и так прижат к низу экрана. -->
-              <div v-if="plusMenu" class="fixed inset-0 z-30" @click="plusMenu = false"></div>
+              <div v-back-close v-if="plusMenu" class="fixed inset-0 z-30" @click="plusMenu = false"></div>
               <div v-if="plusMenu"
                    class="absolute bottom-12 left-0 z-40 w-52 overflow-hidden rounded-xl border border-border2 bg-card py-1 shadow-card">
                 <button type="button" @click="plusMenu = false; pickFile()"
@@ -2624,9 +2645,13 @@ function openActivities() {
                 </div>
               </div>
             </div>
-            <button type="submit" :disabled="(!draft.trim() && !pendingFile) || sending || mascotCooldown.active" :aria-label="locale.t('chatThread.send', 'Отправить')"
-                    class="grid size-10 shrink-0 place-items-center rounded-lg bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50">
-              <Send class="size-5" />
+            <button type="submit" :disabled="(!draft.trim() && !pendingFile) || sending || mascotCooldown.active"
+                    :aria-label="editing ? locale.t('chatThread.saveEdit', 'Сохранить правку') : locale.t('chatThread.send', 'Отправить')"
+                    :title="editing ? locale.t('chatThread.saveEdit', 'Сохранить правку') : locale.t('chatThread.send', 'Отправить')"
+                    class="grid size-10 pointer-coarse:size-11 shrink-0 place-items-center rounded-lg bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50">
+              <!-- В режиме правки — галочка: самолётик обещал новое сообщение, а уходила правка. -->
+              <GbIcon v-if="editing" name="save" class="size-5" />
+              <Send v-else class="size-5" />
             </button>
           </form>
         </template>
@@ -2643,7 +2668,7 @@ function openActivities() {
                  @close="previewFile = null; previewAtt = null" />
 
     <!-- Треды: ответы на сообщение (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) -->
-    <div v-if="activeThread" class="fixed inset-0 z-50 grid place-items-center p-4"
+    <div v-back-close v-if="activeThread" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="m.closeThread()">
       <div class="flex max-h-[80vh] w-full max-w-sm flex-col rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
@@ -2668,7 +2693,7 @@ function openActivities() {
     </div>
 
     <!-- §D18: сводка переписки -->
-    <div v-if="summary.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+    <div v-back-close v-if="summary.open" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="summary.open = false">
       <div class="flex max-h-[80vh] w-full max-w-md flex-col rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
@@ -2692,7 +2717,7 @@ function openActivities() {
     <ReminderDialog v-if="remindMsg" :message="remindMsg" @close="remindMsg = null" />
 
     <!-- Кто прочитал сообщение -->
-    <div v-if="readByPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+    <div v-back-close v-if="readByPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="readByPopup.open = false">
       <div class="w-full max-w-xs rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
@@ -2709,7 +2734,7 @@ function openActivities() {
     </div>
 
     <!-- «Реакции» (Message Info): кто поставил реакцию + кто просмотрел, с временем. -->
-    <div v-if="msgInfoPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+    <div v-back-close v-if="msgInfoPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="msgInfoPopup.open = false">
       <div class="w-full max-w-xs rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
@@ -2746,7 +2771,7 @@ function openActivities() {
                            @pick="onPick" @react="onReact" @close="overlay.open = false" />
 
     <!-- §D11: история редактирования сообщения -->
-    <div v-if="historyPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
+    <div v-back-close v-if="historyPopup.open" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="historyPopup.open = false">
       <div class="w-full max-w-sm rounded-xl border border-border2 bg-card p-4 shadow-card">
         <div class="mb-2 flex items-center gap-2">
@@ -2768,7 +2793,7 @@ function openActivities() {
     </div>
 
     <!-- Выбор режима удаления своего сообщения(-й) -->
-    <div v-if="deleteTargets" class="fixed inset-0 z-50 grid place-items-center p-4"
+    <div v-back-close v-if="deleteTargets" class="fixed inset-0 z-50 grid place-items-center p-4"
          style="background: var(--gb-overlay)" @click.self="deleteTargets = null">
       <div class="w-full max-w-xs rounded-xl border border-border2 bg-card p-5 shadow-card">
         <h3 class="font-title text-base font-bold text-text">

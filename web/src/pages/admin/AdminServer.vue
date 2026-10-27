@@ -17,8 +17,9 @@
 // перехватывает заглушка SPA и отдаёт index.html с кодом 200.
 import { ref, computed, onMounted } from 'vue'
 import {
-  Server, HardDrive, Cpu, Database, Plus, Trash2, RefreshCw, KeyRound,
-  Terminal, ArrowRightLeft, Folder, FileText, ChevronUp, Archive, TriangleAlert } from '@lucide/vue'
+  Server, HardDrive, Cpu, Database, Plus, Trash2, RotateCw, KeyRound, Terminal, ArrowRightLeft,
+  Folder, FileText, ChevronUp, Archive, TriangleAlert,
+} from '@lucide/vue'
 import { adminApi, deskServerApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -301,7 +302,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
         <div v-if="tab === 'state'" class="flex flex-col gap-5">
           <div class="flex flex-wrap items-center gap-3">
             <AppButton variant="ghost" :disabled="remoteBusy" @click="loadRemote">
-              <RefreshCw class="mr-1.5 inline size-4" />{{ remoteBusy ? locale.t('adminServer.pollingBtn', 'Опрашиваем…') : locale.t('adminServer.pollBtn', 'Опросить сервер') }}
+              <RotateCw class="mr-1.5 inline size-4" />{{ remoteBusy ? locale.t('adminServer.pollingBtn', 'Опрашиваем…') : locale.t('adminServer.pollBtn', 'Опросить сервер') }}
             </AppButton>
             <AppButton variant="ghost" :disabled="keyBusy" @click="installKey">
               <KeyRound class="mr-1.5 inline size-4" />{{ keyBusy ? locale.t('adminServer.installingKeyBtn', 'Ставим ключ…') : locale.t('adminServer.installKeyBtn', 'Положить ключ на сервер') }}
@@ -407,7 +408,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
           </div>
           <div>
             <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.statusLabel', 'Статус') }}</p>
-            <Badge variant="green">● {{ info.status }}</Badge>
+            <Badge variant="green"><span class="mr-1 inline-block size-1.5 rounded-full bg-current align-middle" aria-hidden="true"></span>{{ info.status }}</Badge>
           </div>
           <div>
             <p class="text-tiny uppercase text-text3">{{ locale.t('adminServer.versionLabel', 'Версия') }}</p>
@@ -423,7 +424,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
           </div>
           <div class="ml-auto">
             <AppButton variant="ghost" @click="reload">
-              <RefreshCw class="mr-1.5 inline size-4" />{{ locale.t('common.refresh') }}
+              <RotateCw class="mr-1.5 inline size-4" />{{ locale.t('common.refresh') }}
             </AppButton>
           </div>
         </div>

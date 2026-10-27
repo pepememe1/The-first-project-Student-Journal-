@@ -10,7 +10,7 @@
 // Разбор фразы делает СЕРВЕР (`POST /web/vector/voice/command`, общий модуль
 // `voice_command.py`), а запись — существующий `/web/teacher/grade`. Здесь только выбор.
 import { ref, computed, watch } from 'vue'
-import { Mic, AlertTriangle, Check, X } from '@lucide/vue'
+import { Mic, TriangleAlert, Check, X } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -76,7 +76,7 @@ function submit() {
       <!-- Ошибка разбора: писать нечего, объясняем причину и не показываем пустой список. -->
       <div v-if="result.error"
            class="flex items-start gap-2 rounded-md border border-orange/40 bg-orange/5 px-3 py-2.5 text-sm text-text2">
-        <AlertTriangle class="mt-0.5 size-4 shrink-0 text-orange" />
+        <TriangleAlert class="mt-0.5 size-4 shrink-0 text-orange" />
         <span>{{ result.error }}</span>
       </div>
 
@@ -105,7 +105,7 @@ function submit() {
              хуже, чем записать остальных и сказать про пропущенного. -->
         <ul v-if="result.warnings?.length" class="mt-2 space-y-1">
           <li v-for="(w, i) in result.warnings" :key="i" class="flex items-start gap-2 text-xs text-orange">
-            <AlertTriangle class="mt-0.5 size-3.5 shrink-0" />{{ w }}
+            <TriangleAlert class="mt-0.5 size-3.5 shrink-0" />{{ w }}
           </li>
         </ul>
       </template>

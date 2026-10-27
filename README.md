@@ -100,8 +100,9 @@
 модели, по реальному списку группы, и ничего не записывается без подтверждения человеком.
 Можно поставить оценку всей группе одной фразой.
 Чем распознавать речь, решает администратор: **Whisper на сервере колледжа** (звук не
-покидает контур вуза) или распознавание браузера, если такого сервера нет. Режим «только
-свой сервер» запрещает отдавать звук браузеру даже там, где Whisper не установлен.
+покидает контур вуза) или распознавание браузера. По умолчанию — только свой сервер: где
+Whisper не установлен, голосовой ввод выключен, а отдать звук облачному сервису браузера
+можно лишь явным выбором администратора.
 
 **Вектор отвечает голосом.** Помощник не только пишет, но и проговаривает ответы вслух —
 на выбор мужской или женский голос, синтез на сервере (Silero). Без связи с сервером ответ
@@ -463,14 +464,14 @@ python -X utf8 tools/qa_stand.py      # http://127.0.0.1:8765
 
 ## Тесты
 
-Держим зелёными: **1072 клиентских**, **2223 серверных**, **873 веб-теста**, **28 Android**
-(14.10.2026, без красных и пропущенных). Линтеры — `ruff` для Python и ESLint 9 для веба,
+Держим зелёными: **1143 клиентских**, **2359 серверных**, **956 веб-тестов**
+(23.10.2026, без красных и пропущенных). Линтеры — `ruff` для Python и ESLint 9 для веба,
 типы — `mypy` по списку уже типизированных модулей (настройки в `pyproject.toml`).
 CI на GitHub гоняет то же самое плюс SAST (bandit) и поиск секретов (gitleaks).
 
 ```bash
 pytest                    # клиентские тесты (из корня)
-cd server && pytest       # серверные тесты (~35 минут: ГОСТ-хеш на 200 000 итераций)
+cd server && pytest       # серверные тесты (~9 минут: в тестах хеш пароля облегчён, сеть закрыта)
 cd web && npm test        # веб-тесты (node --test, без внешних раннеров)
 cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройство не нужно
 ```
@@ -509,8 +510,10 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 | `voice_command.py` | Разбор голосовых команд преподавателя (оценки/пропуски) — детерминированно, без LLM |
 | `profanity_filter.py` | Цензура мата в мессенджере: поиск по корню, маска `█` (безопасна для markdown) |
 | `reminder_parse.py` | Разбор дат напоминаний («завтра в 9») — тоже без LLM |
-| `desktop_update.py` | Правила автообновления: сравнение версий, имена патчей, хеши, выбор дельты |
-| `support_kb.py` | База знаний для авто-черновиков ответов модерации |
+| `desktop_update.py` | Правила автообновления: сравнение версий, имена патчей, хеши, выбор дельты; строка версии `APP_VERSION` |
+| `college_clock.py` | Время колледжа (Улан-Удэ): «сегодня», учебный день, показ человеку; хранится UTC |
+| `estimators.py` | Статистика по малой выборке: интервал Уилсона, сглаживание Байеса — Лапласа, тренд Тейла — Сена |
+| `teacher_match.py` | Сопоставление ФИО преподавателя из расписания портала с учётной записью |
 | `weather.py` | Погода для приветствия Вектора (упоминается только когда она заметная) |
 
 ### Десктоп
@@ -536,15 +539,14 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 | `data/local_db.py` | Шифрование локальной базы целиком (SQLCipher), смена владельца базы на общем компьютере |
 | `data/security.py` | Хеш пароля (PBKDF2-SHA512 + Стрибог), Fernet, DPAPI |
 | `data/app_settings.py`, `data/data_store.py` | Настройки приложения и key-value хранилище |
-| `data/defaults.py` | Справочные значения для пустой базы. Отдельный модуль намеренно: пока они лежали в файле стилей, слой данных зависел от слоя интерфейса |
 | `data/updater.py` | Клиент автообновления: скачивание, проверка подписи, подмена .exe переименованием |
 | `data/student_link.py`, `data/audit.py`, `data/terms.py` | Доклейка `student_id`, анти-брутфорс, учебные периоды |
 | `sync/sync_client.py` | HTTP-клиент к серверу (единственный путь к общим данным) |
 | `sync/sync_runner.py` | Фоновый поток синхронизации; сброс всего, что привязано к прежнему человеку, при смене пользователя |
 | `sync/verifier.py` | «Сверщик»: только читает и проверяет, что локальная копия совпадает с сервером |
-| `sync/sync_engine.py` | Прежний движок синка. **Выведен из продукта** 25.09.2026; вернуть его импорт не даёт тест |
+| `archive/` | Код, выведенный из продукта: прежний движок синка `sync_engine.py` (с 25.09.2026), база знаний модерации и другое. Не исполняется; вернуть импорт не даёт тест |
 | `schedule/parser.py` | Парсер `portal.esstu.ru` на stdlib (без BeautifulSoup — чистые лицензии), пять категорий, два формата страницы |
-| `schedule/store.py`, `schedule/model.py`, `schedule/reminders.py`, `schedule/specialty.py` | Зашифрованный кэш по категориям, модель, напоминания |
+| `schedule/store.py`, `schedule/model.py`, `schedule/reminders.py`, `schedule/overrides.py`, `schedule/conflicts.py` | Зашифрованный кэш по категориям, модель, напоминания, правки поверх портала, накладки |
 | `assets/` (`emotions/`, `animations/`, `fonts/`, `specialties/`) | Исходники арта маскота (30 эмоций + анимации) и шрифтов. Человеку они приезжают из `web/public` — эти папки в релизный .exe не входят |
 | `tools/` | `build_mascot_anim.py` (ролики → WebP), `build_android_icons.py`, `build_web_fonts.py`, `make_desktop_patch.py`, `publish_desktop_update.sh`, `graph_rebuild.py` и `graph_api_bridge.py` (карта связей репозитория) |
 | `tests/` | Клиентские тесты (`pytest` из корня) |
@@ -576,6 +578,7 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 | `app/schedule_web.py`, `app/parsers/esstu_parser.py` | Серверный парсер расписания и учебных планов ВСГУТУ (PDF) |
 | `app/vector_llm.py`, `app/stt_service.py`, `app/tts_service.py`, `app/translate_service.py`, `app/gif_service.py` | LLM-озвучка, распознавание речи, синтез (Silero), перевод, GIF-прокси |
 | `app/rustore_push.py`, `app/msg_limit.py`, `app/messenger_ai.py`, `app/curator_report.py`, `app/data_transfer.py`, `app/hostinfo.py` | Пуши, анти-флуд, ИИ-функции чата, отчёты куратора, выгрузка/копии, метрики машины |
+| `app/request_metrics.py`, `app/client_metrics.py`, `app/routers/clientreport.py` | Метрики запросов; ошибки интерфейса и время старта у клиентов (`POST /app/client-report`, без ПДн, сводка — в разделе «Сервер») |
 | `tests/` | Серверные тесты (`cd server && pytest`) |
 | `Caddyfile` | **Единственный** боевой конфиг: реверс-прокси, HTTPS, заголовки безопасности, CSP, сжатие. Сверка с боем — `tools/check_prod_caddyfile.sh` |
 | `verify_audit.py`, `rotate_db_key.py`, `mfa_admin.py` | Проверка журнала аудита мимо приложения, смена ключа базы, аварийный сброс второго фактора — только с самой машины |
@@ -592,7 +595,7 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 | `src/config/` | `nav.js`, `mascot.js` (порт `emotes.pick`), `roles.js`, `status.js`, `vectorCommands.js` |
 | `src/i18n/dictionaries.js` | Тексты интерфейса ru/en/zh (парность ключей держит тест) |
 | `src/theme/` | Палитра, токены `--gb-*`, `dataviz.js` (категориальные цвета графиков) |
-| `src/utils/` | `grading.js` (контракт с Python), `markdownLite.js`, `videoEmbed.js`, `gifEmbed.js`, `clipboard.js`, `voiceInput.js` |
+| `src/utils/` | `grading.js` (контракт с Python), `markdownLite.js`, `videoEmbed.js`, `gifEmbed.js`, `clipboard.js`, `voiceInput.js`; `backLayers.js` и `backButton.js` (системная «назад» на Android: окно → прошлый экран → свернуть), `clientReport.js` (ошибки и время старта на сервер) |
 | `public/fonts/` | Фирменные шрифты своими файлами (собираются `tools/build_web_fonts.py`) |
 | `tests/` | `node --test`: контракты Python↔JS, i18n-аудит, markdown, видео, сторож мобильной вёрстки |
 | `src/services/` | `push.js` (пуши RuStore), `scheduleWidget.js` (снимок расписания для виджета на рабочем столе) |

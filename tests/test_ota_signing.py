@@ -71,6 +71,44 @@ def test_app_key_list_rejects_a_foreign_signature(tmp_path):
         "манифест, подписанный чужим ключом, прошёл ворота выкладки"
 
 
+def test_files_fixture_verifies_in_python_too():
+    """Общий образец пофайлового обновления: отпечаток списка и подпись над ним сходятся
+    и здесь, и в `web/tests/otaVerify.test.mjs`."""
+    import ota_files
+    with open(os.path.join(ROOT, "web", "tests", "fixtures", "ota-files-fixture.json"),
+              encoding="utf-8") as fh:
+        fx = json.load(fh)
+    digest = ota_files.files_digest((e["file_name"], e["file_hash"]) for e in fx["manifest"])
+    assert digest == fx["digest"]
+    assert sign_ota.verify_payload(sign_ota.ota_files_payload(fx["version"], fx["checksum"], digest),
+                                   fx["files_sig"], [fx["spki"]])
+
+
+def test_release_signs_the_file_list_of_the_archive_next_to_it(tmp_path, monkeypatch):
+    """`sign` подписывает и список файлов архива; архив подменили после подписи — `verify`
+    на воротах выкладки отказывает, а не пропускает список, который телефоны отвергнут.
+
+    Обратный ход: уберите сверку `files_sig` из `main` — краснеет вторая половина."""
+    import zipfile
+    pem, spki = _keypair()
+    key = tmp_path / "k.pem"
+    key.write_bytes(pem)
+    monkeypatch.setattr(sign_ota, "PRIVATE_KEY", str(key))
+    monkeypatch.setattr(sign_ota, "public_keys", lambda: [spki])
+    with zipfile.ZipFile(tmp_path / "1.2.3.zip", "w") as z:
+        z.writestr("index.html", "<!doctype html>")
+        z.writestr("assets/a.js", "1")
+    p = tmp_path / "latest.json"
+    p.write_text(json.dumps({"version": "1.2.3", "file": "1.2.3.zip", "checksum": "ab" * 32}),
+                 encoding="utf-8")
+    assert sign_ota.main(["sign_ota.py", "sign", str(p)]) == 0
+    assert json.loads(p.read_text(encoding="utf-8")).get("files_sig")
+    with zipfile.ZipFile(tmp_path / "1.2.3.zip", "w") as z:
+        z.writestr("index.html", "<!doctype html>")
+        z.writestr("assets/a.js", "2")
+    assert sign_ota.main(["sign_ota.py", "verify", str(p)]) == 1
+
+
 def test_app_key_matches_the_private_key_on_the_release_machine():
     if not os.path.isfile(sign_ota.PRIVATE_KEY):
         pytest.skip("закрытого ключа OTA на этой машине нет (CI, чужая машина) — сверять не с чем")

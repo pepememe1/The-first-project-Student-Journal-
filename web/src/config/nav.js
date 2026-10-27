@@ -20,11 +20,12 @@
  * карточек и старые закладки, и отдавать по ним 404 значило бы сломать работающее.
  */
 import {
-  Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, Bot,
-  BookOpen, Users, GraduationCap, Boxes, Library, Server,
-  MonitorSmartphone, Activity, LayoutDashboard, UserPlus,
-  AlertTriangle, MessagesSquare, ShieldAlert, ShieldCheck, UsersRound, Database,
-  Archive, BookMarked, ScrollText, Cpu, KeyRound, Inbox, PackageOpen, Radar } from '@lucide/vue'
+  Home, ClipboardList, ClipboardCheck, CalendarDays, BarChart3, BookOpen, Users,
+  GraduationCap, Boxes, Library, Server, MonitorSmartphone, Activity, LayoutDashboard,
+  UserPlus, TriangleAlert, MessagesSquare, ShieldAlert, ShieldCheck, UsersRound, Database,
+  Archive, BookMarked, ScrollText, Cpu, KeyRound, Inbox, PackageOpen, Radar,
+} from '@lucide/vue'
+import { VectorHead } from '../components/icons/brandIcons.js'
 
 export const NAV = {
   student: [
@@ -34,7 +35,7 @@ export const NAV = {
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/student/schedule' },
     { key: 'stats', label: 'Статистика', i18n: 'nav.stats', icon: BarChart3, to: '/student/stats' },
     { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/student/courses' },
-    { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/student/vector' },
+    { key: 'ai', label: 'Помощник Вектор', i18n: 'nav.ai', icon: VectorHead, to: '/student/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/student/messages', badge: 'messagesUnread' },
     { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/student/notifications', badge: 'notifyUnread' },
   ],
@@ -47,7 +48,7 @@ export const NAV = {
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/teacher/schedule' },
     { key: 'stats', label: 'Статистика', i18n: 'nav.stats', icon: BarChart3, to: '/teacher/stats' },
     { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/teacher/courses' },
-    { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/teacher/vector' },
+    { key: 'ai', label: 'Помощник Вектор', i18n: 'nav.ai', icon: VectorHead, to: '/teacher/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/teacher/messages', badge: 'messagesUnread' },
     { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/teacher/notifications', badge: 'notifyUnread' },
   ],
@@ -58,7 +59,7 @@ export const NAV = {
     { section: 'Ребёнок', i18n: 'nav.section.child' },
     { key: 'journal', label: 'Журнал', i18n: 'nav.teacherJournal', icon: ClipboardList, to: '/parent' },
     { key: 'courses', label: 'Курсы', i18n: 'nav.courses', icon: BookMarked, to: '/parent/courses' },
-    { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/parent/vector' },
+    { key: 'ai', label: 'Помощник Вектор', i18n: 'nav.ai', icon: VectorHead, to: '/parent/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/parent/messages', badge: 'messagesUnread' },
     { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/parent/notifications', badge: 'notifyUnread' },
   ],
@@ -97,10 +98,10 @@ export const NAV = {
     { key: 'subjectArchive', label: 'Архив предметов', i18n: 'nav.subjectArchive', icon: Archive, to: '/admin/subject-archive' },
     { key: 'schedule', label: 'Расписание', i18n: 'nav.schedule', icon: CalendarDays, to: '/admin/schedule' },
     // badge: 'scheduleIssues' — Sidebar подставит число найденных накладок.
-    { key: 'issues', label: 'Накладки расписания', icon: AlertTriangle,
+    { key: 'issues', label: 'Накладки расписания', icon: TriangleAlert,
       to: '/admin/schedule-issues', badge: 'scheduleIssues' },
     { section: 'Общение', i18n: 'nav.sectionCommunication' },
-    { key: 'ai', label: 'ИИ Помощник', i18n: 'nav.ai', icon: Bot, to: '/admin/vector' },
+    { key: 'ai', label: 'Помощник Вектор', i18n: 'nav.ai', icon: VectorHead, to: '/admin/vector' },
     { key: 'messages', label: 'Сообщения', i18n: 'nav.messages', icon: MessagesSquare, to: '/admin/messages', badge: 'messagesUnread' },
     { key: 'notifications', label: 'Уведомления', i18n: 'nav.notifications', icon: Inbox, to: '/admin/notifications', badge: 'notifyUnread' },
     { key: 'moderation', label: 'Модерация чатов', i18n: 'nav.moderation', icon: ShieldAlert, to: '/admin/moderation' },
@@ -140,3 +141,44 @@ export const NAV = {
 
 export const HOME_BY_ROLE = { student: '/student', teacher: '/teacher', admin: '/admin',
   parent: '/parent', moderator: '/moderator' }
+
+// ━━ НИЖНЯЯ ПАНЕЛЬ ТЕЛЕФОНА (23.10.2026, §4.51) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Как у Material 3 и iOS: три-четыре самых частых раздела роли и последней вкладкой
+// «Меню» со всем остальным. Пять мест на панели — потолок обоих руководств: шестая
+// вкладка становится уже пальца, а подпись под значком перестаёт помещаться.
+// Порядок один и тот же у всех ролей, где раздел есть: главное — первым, «Меню» —
+// последним, чтобы рука запоминала место, а не искала его. Пункты — ключи из `NAV`:
+// подпись, значок, адрес и значок непрочитанного берутся оттуда, второй копии нет.
+export const TABS = {
+  student: ['dash', 'journal', 'schedule', 'messages'],
+  teacher: ['journal', 'schedule', 'messages', 'ai'],
+  parent: ['journal', 'messages', 'ai'],
+  admin: ['dash', 'students', 'messages', 'ai'],
+  moderator: ['moderation', 'messages', 'notifications'],
+}
+
+// Короткая подпись под значком: под ним помещается одно слово крупным шрифтом, а
+// «Мой журнал» и «Помощник Вектор» в ширину пятой части экрана не влезают.
+export const TAB_LABELS = {
+  journal: ['nav.tab.journal', 'Журнал'],
+  ai: ['nav.tab.vector', 'Вектор'],
+  dash: ['nav.home', 'Главная'],
+}
+
+/**
+ * Открыт ли раздел. Главная роли (`/teacher`) — только сама, иначе она горела бы на
+ * каждой странице кабинета; остальные — вместе со своими подстраницами. Одно правило
+ * на боковое меню и нижнюю панель.
+ */
+export function isNavActive(to, path) {
+  if (to.split('/').length <= 2) return path === to
+  return path === to || path.startsWith(to + '/')
+}
+
+/** Вкладки роли: пункты `NAV` в порядке `TABS` (пропущенные куратором и прочие — мимо). */
+export function tabsFor(role) {
+  const items = NAV[role] || []
+  return (TABS[role] || [])
+    .map((key) => items.find((it) => it.key === key))
+    .filter(Boolean)
+}

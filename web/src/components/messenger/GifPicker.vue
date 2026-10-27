@@ -137,7 +137,7 @@ function send(item) {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50" :class="anchor === 'center' ? 'grid place-items-center bg-black/40 p-4' : ''"
+  <div v-back-close class="fixed inset-0 z-50" :class="anchor === 'center' ? 'grid place-items-center bg-black/40 p-4' : ''"
        @click="emit('close')">
     <div class="flex h-96 w-80 max-w-[calc(100vw-1rem)] flex-col
                 overflow-hidden rounded-xl border border-border2 bg-card shadow-card"
@@ -190,7 +190,7 @@ function send(item) {
       <div v-else class="min-h-0 flex-1 overflow-y-auto p-2" @scroll="onScroll">
         <p v-if="loading && !items.length" class="py-8 text-center text-xs text-text3">{{ locale.t('notifications.loading', 'Загрузка…') }}</p>
         <p v-else-if="!items.length" class="py-8 text-center text-xs text-text3">
-          {{ activeKey === FAVORITES ? locale.t('gif.noFavorites', 'Пока нет избранных GIF — наведите на любой и нажмите ⭐')
+          {{ activeKey === FAVORITES ? locale.t('gif.noFavorites', 'Пока нет избранных GIF — наведите на любой и нажмите звёздочку')
              : locale.t('gif.nothingFound', 'Ничего не нашлось') }}
         </p>
         <div v-else class="grid grid-cols-2 gap-1.5">

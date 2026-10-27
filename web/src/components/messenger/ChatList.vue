@@ -4,9 +4,11 @@
 // чату открывает переписку; по человеку — личный чат; по каналу — вступление/открытие.
 import { ref, computed, watch, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Search, Plus, Users, Radio, Megaphone, Briefcase, Star, Archive, MoreVertical,
-         Pin, PinOff, ArchiveRestore, PieChart, UserPlus,
-         Bell, BellOff, MailOpen, Eraser, Trash2, Ban } from '@lucide/vue'
+import {
+         Search, Plus, Users, Radio, Megaphone, Briefcase, Star, Archive, EllipsisVertical,
+         Pin, PinOff, ArchiveRestore, PieChart, UserPlus, Bell, BellOff, MailOpen, Eraser,
+         Trash2, Ban,
+} from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -26,6 +28,7 @@ import Avatar from '@/components/ui/Avatar.vue'
 import GroupTag from '@/components/ui/GroupTag.vue'
 import { studentGroup } from '@/utils/people'
 import { mediaSrc } from '@/utils/mediaSrc'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const m = useMessengerStore()
 const toast = useToast()
@@ -301,11 +304,11 @@ onMounted(() => { m.loadChats() })
         <div class="flex flex-1 items-center gap-2 rounded-lg border border-border2 bg-card2 px-3">
           <Search class="size-4 shrink-0 text-text3" />
           <input v-model="q" :placeholder="locale.t('messenger.searchByName', 'Поиск по ФИО…')"
-                 class="h-9 min-w-0 flex-1 bg-transparent text-sm text-text outline-none" />
+                 class="h-9 min-w-0 flex-1 bg-transparent text-sm text-text outline-none pointer-coarse:h-11" />
         </div>
         <div v-if="canCreate" class="relative">
           <button type="button" @click="showNew = !showNew" :aria-label="locale.t('messenger.create', 'Создать')"
-                  class="grid size-9 place-items-center rounded-lg bg-accent text-white hover:bg-accent2"><Plus class="size-5" /></button>
+                  class="grid size-9 place-items-center rounded-lg bg-accent text-white hover:bg-accent2 pointer-coarse:size-11"><Plus class="size-5" /></button>
           <div v-if="showNew" class="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-lg border border-border2 bg-card py-1 shadow-card">
             <button type="button" @click="startCreate('group')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Users class="size-4 text-text3" />{{ locale.t('messenger.newGroup', 'Новая группа') }}</button>
             <button v-if="canCreateChannel" type="button" @click="startCreate('channel')" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2"><Radio class="size-4 text-text3" />{{ locale.t('messenger.newChannel', 'Новый канал') }}</button>
@@ -322,7 +325,7 @@ onMounted(() => { m.loadChats() })
       <div class="mt-2 flex gap-1">
         <button v-for="t in catalogTabs"
                 :key="t[0]" type="button" @click="tab = t[0]"
-                class="flex-1 rounded-md px-1.5 py-1.5 text-[11px] font-semibold transition-colors"
+                class="flex-1 rounded-md px-1.5 py-1.5 text-[11px] font-semibold transition-colors pointer-coarse:min-h-11"
                 :class="tab === t[0] ? 'bg-accent-glow text-accent' : 'text-text3 hover:bg-bg2 hover:text-text'">
           {{ t[1] }}
         </button>
@@ -352,7 +355,7 @@ onMounted(() => { m.loadChats() })
           <span class="shrink-0 rounded-full bg-bg2 px-2 py-0.5 text-[11px] font-semibold text-text3">{{ archivedCount }}</span>
         </button>
         <div v-if="tab === 'archive'" class="flex items-center gap-2 border-b border-border/50 px-3 py-2">
-          <button type="button" @click="tab = 'chats'" class="text-xs font-semibold text-accent hover:underline">← {{ locale.t('messenger.backToChats', 'Назад к чатам') }}</button>
+          <button type="button" @click="tab = 'chats'" class="inline-flex items-center gap-1 text-xs font-semibold text-accent hover:underline"><GbIcon name="back" class="size-3.5" />{{ locale.t('messenger.backToChats', 'Назад к чатам') }}</button>
         </div>
 
         <!-- ЗАЯВКИ В БЕСЕДУ. Студент позвал преподавателя в свою группу; пока заявка не
@@ -386,8 +389,22 @@ onMounted(() => { m.loadChats() })
           </div>
         </div>
 
-        <p v-if="!loadingChats && !shownChats.length && !invites.length" class="p-4 text-center text-sm text-text3">
-          {{ tab === 'archive' ? locale.t('messenger.archiveEmpty', 'В архиве пусто.') : locale.t('messenger.noChatsYet', 'Пока нет переписок. Найдите человека через поиск') }}<span v-if="canCreate && tab === 'chats'">{{ ' ' + (canCreateChannel ? locale.t('messenger.orCreateHint', 'или создайте группу/канал кнопкой «+»') : locale.t('messenger.orCreateGroupHint', 'или соберите группу кнопкой «+»')) }}</span>.
+        <!-- Поиск в «Чатах» ищет только по своим перепискам. Не нашлось — сразу предлагаем
+             поискать среди людей, а не оставляем пустоту: раньше человек видел совет «найдите
+             через поиск» и не понимал, почему поиск молчит (живой прогон 27.10.2026). -->
+        <div v-if="!loadingChats && tab === 'chats' && q.trim() && !shownChats.length"
+             class="space-y-3 p-4 text-center text-sm text-text3">
+          <p>{{ locale.t('messenger.noChatMatch', { q: q.trim() }) }}</p>
+          <div class="flex flex-wrap justify-center gap-2">
+            <button v-for="ct in catalogTabs.filter((x) => ['teacher', 'student', 'parent'].includes(x[0]))" :key="ct[0]"
+                    type="button" @click="tab = ct[0]"
+                    class="rounded-full border border-border2 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent-glow pointer-coarse:min-h-11">
+              {{ locale.t('messenger.searchAmong', { where: ct[1] }) }}
+            </button>
+          </div>
+        </div>
+        <p v-else-if="!loadingChats && !shownChats.length && !invites.length" class="p-4 text-center text-sm text-text3">
+          {{ tab === 'archive' ? locale.t('messenger.archiveEmpty', 'В архиве пусто.') : locale.t('messenger.noChatsYet', 'Пока нет переписок. Найдите человека на вкладке «Студенты» или «Препод.»') }}<span v-if="canCreate && tab === 'chats'">{{ ' ' + (canCreateChannel ? locale.t('messenger.orCreateHint', 'или создайте группу/канал кнопкой «+»') : locale.t('messenger.orCreateGroupHint', 'или соберите группу кнопкой «+»')) }}</span>.
         </p>
         <!-- ПКМ по строке открывает то же меню, что «⋮». Родное меню браузера здесь
              бесполезно («Назад», «Обновить»), а привычка нажимать правой на строку
@@ -461,11 +478,11 @@ onMounted(() => { m.loadChats() })
             <button type="button" @click.stop="toggleMenu(c.conversation_id)" :aria-label="locale.t('messenger.actions', 'Действия')"
                     class="grid size-7 place-items-center rounded-md text-text3 opacity-0 hover:bg-bg2 hover:text-text group-hover:opacity-100"
                     :class="{ 'opacity-100 bg-bg2': menuFor === c.conversation_id }">
-              <MoreVertical class="size-4" />
+              <EllipsisVertical class="size-4" />
             </button>
             <!-- Подложка-ловушка: без неё меню закрывается только повторным нажатием на
                  «⋮», и промахнувшийся мимо пункта остаётся с открытым меню. -->
-            <div v-if="menuFor === c.conversation_id" class="fixed inset-0 z-10" @click.stop="menuFor = ''" />
+            <div v-back-close v-if="menuFor === c.conversation_id" class="fixed inset-0 z-10" @click.stop="menuFor = ''" />
             <div v-if="menuFor === c.conversation_id"
                  class="absolute right-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-border2 bg-card py-1 shadow-card">
               <button type="button" @click.stop="onArchive(c)" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2">

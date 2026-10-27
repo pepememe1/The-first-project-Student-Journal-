@@ -20,8 +20,10 @@
 // (чужой профиль) этого не касается — там ни «о себе», ни заметка не редактируются.
 import { ref, computed, onMounted, watch } from 'vue'
 import { resetDraft, syncDraft } from '@/utils/draftSync'
-import { Camera, Send, Pencil, ImageIcon, Film, Trash2,
-         MoreHorizontal, UserPlus, Share2, Ban, Flag, Eraser } from '@lucide/vue'
+import {
+         Camera, Send, Pencil, ImageIcon, Film, Trash2, EllipsisVertical, UserPlus, Share2,
+         Ban, Flag, Eraser,
+} from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import { publicSiteOrigin } from '@/api/server'
 import { useAuthStore } from '@/stores/auth'
@@ -38,7 +40,8 @@ import GifPicker from '@/components/messenger/GifPicker.vue'
 import ReportUserDialog from '@/components/messenger/ReportUserDialog.vue'
 import StampEgg from '@/components/easter/StampEgg.vue'
 import { useToast } from '@/composables/useToast'
-import { mediaSrc } from '@/utils/mediaSrc'
+import { gifPosterSrc, gifVideoSrc, mediaSrc, playMuted } from '@/utils/mediaSrc'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const props = defineProps({
   editable: { type: Boolean, default: false },
@@ -138,6 +141,10 @@ const metaLine = computed(() => {
 // красит подложку значка роли и участвует в оформлении имени — гифка ложится только на
 // верхнюю полосу. Поэтому «убрать баннер» возвращает цвет, а не оставляет пустоту.
 const bannerUrl = computed(() => shown.value.profile_banner || '')
+//Гифка-баннер — роликом MP4 с первым кадром сразу, как аватарка (utils/mediaSrc.js).
+const bannerVideo = computed(() => gifVideoSrc(bannerUrl.value))
+const bannerVideoFailed = ref(false)
+watch(bannerUrl, () => { bannerVideoFailed.value = false })
 
 // Фуллскрин-просмотр аватарки/баннера ЧУЖОГО профиля по клику (Влад): полноценный файл
 // без круглой/квадратной обрезки. '' — закрыт. В своём (editable) профиле клик по картинке
@@ -180,13 +187,14 @@ function onGifPicked(item) {
   const target = gifPickerFor.value
   gifPickerFor.value = ''
   if (!item) return
-  // ⚠️ Берём `url` (это gif, см. gif_service._simplify), а НЕ лёгкое превью `thumb_url`,
-  // хотя аватарка рисуется размером 32–80 px и превью хватило бы по пикселям. Причина:
-  // превью — webp, и АНИМИРОВАН ли он, проверить не удалось (ключ Klipy живёт только на
-  // сервере, а доступа к нему в момент правки не было). Неподвижная «гифка-аватарка» —
-  // это молчаливый отказ фичи, а лишние килобайты — всего лишь лишние килобайты.
-  // Подтвердится, что превью анимировано, — здесь меняется одно слово.
-  const src = item.url || item.thumb_url || ''
+  // Аватарке — лёгкое превью `thumb_url`, баннеру — гифка `url` (gif_service._simplify).
+  // Проверено 23.10.2026 на шести гифках «в тренде»: превью webp анимировано и легче
+  // гифки в 10–70 раз (17 КБ против 264 КБ, 210 КБ против 14,6 МБ). С гифкой аватарка
+  // в 32 px тянула мегабайты: у одного преподавателя — 13,7 МБ, и телефон до конца
+  // загрузки показывал значок роли вместо картинки. Баннер крупный — превью там мутное.
+  const src = target === 'avatar'
+    ? (item.thumb_url || item.url || '')
+    : (item.url || item.thumb_url || '')
   if (target === 'avatar') applyAvatar(src)
   else if (target === 'banner') applyBanner(src)
 }
@@ -410,7 +418,11 @@ async function sendMessage() {
          :class="editable ? 'cursor-pointer' : ''"
          :style="bannerUrl ? undefined : { background: plate }"
          @click="editable && (gifPickerFor = 'banner')">
-      <img v-if="bannerUrl" :src="mediaSrc(bannerUrl)" alt="" class="size-full object-cover"
+      <video v-if="bannerVideo && !bannerVideoFailed" :src="bannerVideo" :poster="gifPosterSrc(bannerUrl)"
+             autoplay muted loop playsinline disablepictureinpicture aria-hidden="true"
+             class="size-full object-cover" :class="{ 'cursor-zoom-in': !editable }"
+             @canplay="playMuted" @error="bannerVideoFailed = true" @click="!editable && (lightbox = bannerUrl)" />
+      <img v-else-if="bannerUrl" :src="mediaSrc(bannerUrl)" alt="" class="size-full object-cover"
            :class="{ 'cursor-zoom-in': !editable }"
            @click="!editable && (lightbox = bannerUrl)" />
       <!-- Карандаш виден ВСЕГДА, а не только при наведении: на телефоне наведения не
@@ -470,7 +482,7 @@ async function sendMessage() {
              ⚠️ Якорь к аватарке на `sm+` СОХРАНЁН: в карточке собеседника меню открывают
              нажатием на саму аватарку, и там выпадающий список стоит на своём месте. -->
         <template v-if="editable && avatarMenuOpen">
-          <div class="fixed inset-0 z-30" @click="avatarMenuOpen = false" />
+          <div v-back-close class="fixed inset-0 z-30" @click="avatarMenuOpen = false" />
           <div class="fixed inset-x-3 bottom-3 z-40 overflow-hidden rounded-lg border border-border2
                       bg-card py-1 shadow-card
                       sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:top-[calc(100%+0.375rem)] sm:w-52">
@@ -519,13 +531,13 @@ async function sendMessage() {
                   :aria-label="locale.t('peerProfile.more', 'Ещё')"
                   class="grid size-10 place-items-center rounded-lg border border-border2 text-text2
                          transition hover:bg-bg2 hover:text-text">
-            <MoreHorizontal class="size-5" />
+            <EllipsisVertical class="size-5" />
           </button>
 
           <!-- Подложка-ловушка клика: без неё меню закрывается только повторным нажатием
                на те же три точки, и человек, промахнувшийся мимо пункта, остаётся с
                открытым меню поверх карточки. -->
-          <div v-if="menuOpen" class="fixed inset-0 z-40" @click="menuOpen = false" />
+          <div v-back-close v-if="menuOpen" class="fixed inset-0 z-40" @click="menuOpen = false" />
 
           <div v-if="menuOpen"
                class="absolute right-0 z-50 mt-1 w-60 overflow-hidden rounded-xl border border-border2
@@ -597,7 +609,7 @@ async function sendMessage() {
            Год не хранится и не показывается — только день и месяц. -->
       <div v-if="shown.birthday" class="mt-3 flex items-center gap-2 rounded-lg border border-border
                                         bg-card2 px-3 py-2.5">
-        <span class="text-base leading-none">🎂</span>
+        <GbIcon name="birthday" class="size-4 shrink-0 text-accent" />
         <span class="text-[11px] uppercase tracking-wide text-text3">
           {{ locale.t('peerProfile.birthday', 'День рождения') }}
         </span>
@@ -628,7 +640,7 @@ async function sendMessage() {
 
     <!-- Фуллскрин аватарки/баннера чужого профиля: полноценный файл без обрезки,
          клик по фону закрывает (Влад). -->
-    <div v-if="lightbox" class="fixed inset-0 z-[80] grid place-items-center bg-black/80 p-4"
+    <div v-back-close v-if="lightbox" class="fixed inset-0 z-[80] grid place-items-center bg-black/80 p-4"
          @click="lightbox = ''">
       <img :src="mediaSrc(lightbox)" alt="" class="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl" />
     </div>

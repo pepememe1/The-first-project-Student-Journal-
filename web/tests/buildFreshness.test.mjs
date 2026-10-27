@@ -88,8 +88,11 @@ test('🔒 окно, открываемое само по ссылке, без �
 test('проводка: роутер и окно трекера идут через одну дверь', () => {
   const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
   const app = read('../src/utils/appVersion.js')
-  assert.match(app, /router\.onError\(\(err\) => \{ reloadOnceForChunk\(err, \{ reload \}\) \}\)/,
+  assert.match(app, /router\.onError\(\(err\) => \{\s*if \(reloadOnceForChunk\(err, \{ reload \}\)\) return/,
     'отказ загрузки страницы больше не доходит до общего правила')
+  // Перезагрузка уже была, а файла всё нет — человеку плашка со словами, а не белый экран.
+  assert.match(app, /if \(isChunkLoadError\(err\)\) showChunkFailure\(reload\)/,
+    'после разовой перезагрузки отказ снова остаётся без объяснения')
   assert.match(app, /if \(!chunkReloadDue\(err, tabStorage\(\), \{ needLock \}\)\) return false/,
     'решение о перезагрузке ради чанка принимается мимо проверяемой функции')
   assert.match(app, /if \(!stampReloadDue\(BUILD_STAMP, server, tabStorage\(\)\)\) return false/,

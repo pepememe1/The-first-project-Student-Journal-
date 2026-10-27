@@ -100,7 +100,10 @@ export const useTtsStore = defineStore('tts', () => {
       : t('settings.ttsModeOff', 'Озвучка выключена')
   })
 
+  let statusChecked = false
+
   async function refreshStatus() {
+    statusChecked = true
     try {
       const { data } = await vectorApi.ttsStatus()
       available.value = !!data.available
@@ -264,6 +267,12 @@ export const useTtsStore = defineStore('tts', () => {
     // моделью (набор звуков, не речь) — сразу берём браузерный синтез в нужном языке,
     // сервер даже не запрашиваем.
     if (localeCode !== 'ru') { fallback(); return }
+    // Синтеза на сервере нет (на боевом VPS Silero не ставится) — не спрашиваем его на
+    // каждый ответ: раньше каждый ответ Вектора давал 503 в консоли (живой прогон
+    // 27.10.2026). Статус узнаём один раз, дальше решает `available`.
+    if (!statusChecked) { statusChecked = true; await refreshStatus() }
+    if (my !== reqGen) return
+    if (!available.value) { fallback(); return }
     try {
       const c = _ensureCtx()
       if (!c) throw new Error('no-audiocontext')

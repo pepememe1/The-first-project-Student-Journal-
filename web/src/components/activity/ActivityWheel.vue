@@ -46,13 +46,14 @@
 // колеса в том и состоит, чтобы сначала показать.
 import { ref, computed, onMounted } from 'vue'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 //Геометрия — в отдельном модуле: только так её можно проверить числами
 //(web/tests/wheelGeometry.test.mjs), не поднимая браузер. Копии формул здесь нет.
 import { C, HALF as half, pt, sectorPath, sectorBBox, fitBlockInSector, shotAndCaption,
   CAPTION_GAP, CAPTION_H } from '@/utils/wheelGeometry'
 
 const props = defineProps({
-  kinds: { type: Array, required: true },        // [{ id, emoji }]
+  kinds: { type: Array, required: true },        // [{ id, icon }]
   canSeeJournal: { type: Boolean, default: false },
 })
 const emit = defineEmits(['choose', 'journal'])
@@ -294,11 +295,11 @@ function onActivate(id) {
             </text>
           </template>
 
-          <!-- Сектор в покое: эмодзи и название. Ярлык не перехватывает мышь — иначе
+          <!-- Сектор в покое: значок и название. Ярлык не перехватывает мышь — иначе
                курсор, наехав на текст, «выходил» бы из сектора и раскрытие моргало. -->
           <template v-else>
-            <text :x="s.label[0]" :y="s.label[1] - 6" text-anchor="middle"
-                  class="gb-emoji pointer-events-none">{{ s.emoji }}</text>
+            <component :is="s.icon" :x="s.label[0] - 9" :y="s.label[1] - 16" :size="18"
+                       class="gb-wheel-icon pointer-events-none" aria-hidden="true" />
             <text :x="s.label[0]" :y="s.label[1] + 12" text-anchor="middle"
                   class="gb-name pointer-events-none">
               {{ locale.t(`activity.kind.${s.id}`, s.id) }}
@@ -310,7 +311,7 @@ function onActivate(id) {
         <circle :cx="C" :cy="C" :r="R_IN * half - 4" class="gb-hub"
                 :class="canSeeJournal ? 'gb-hub-live' : ''"
                 @click="canSeeJournal && emit('journal')" />
-        <text :x="C" :y="C - 6" text-anchor="middle" class="gb-emoji pointer-events-none">📓</text>
+        <GbIcon name="journal" :x="C - 9" :y="C - 16" :size="18" class="gb-wheel-icon pointer-events-none" />
         <text :x="C" :y="C + 14" text-anchor="middle" class="gb-hub-text pointer-events-none">
           {{ locale.t('activity.journal.short', 'Журнал') }}
         </text>
@@ -339,7 +340,7 @@ function onActivate(id) {
 .gb-seg-veil { fill: #05070c; opacity: .40 }
 .gb-shot-frame { fill: none; stroke: rgba(255, 255, 255, .28); stroke-width: 1 }
 
-.gb-emoji { font-size: 17px; dominant-baseline: middle }
+.gb-wheel-icon { color: var(--gb-text) }
 .gb-name {
   font-size: 11px; font-weight: 600; fill: var(--gb-text);
   dominant-baseline: middle;

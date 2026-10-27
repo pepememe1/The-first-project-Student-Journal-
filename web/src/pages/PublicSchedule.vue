@@ -46,7 +46,7 @@ import Badge from '@/components/ui/Badge.vue'
 import { dayLabels, kindMap, weekButtonsFor, weekButtonLabelFor } from '@/config/scheduleView'
 import { filterGroups } from '@/utils/groupSearch'
 import { makeRequestGeneration } from '@/utils/requestGeneration'
-import { ArrowLeft, CalendarDays, Search, RotateCw } from '@lucide/vue'
+import { ChevronLeft, CalendarDays, Search, RotateCw } from '@lucide/vue'
 
 const locale = useLocaleStore()
 const router = useRouter()
@@ -285,7 +285,7 @@ onMounted(async () => {
            что был у политики ПДн и соглашения. -->
       <button type="button" @click="router.push('/login')"
               class="mb-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-accent hover:underline">
-        <ArrowLeft class="size-4" />
+        <ChevronLeft class="size-4" />
         {{ locale.t('publicSchedule.back', 'К входу в журнал') }}
       </button>
 
@@ -406,7 +406,7 @@ onMounted(async () => {
         <div class="flex flex-wrap items-center gap-2">
           <button type="button" @click="backToPicker"
                   class="inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-accent hover:underline">
-            <ArrowLeft class="size-4" />
+            <ChevronLeft class="size-4" />
             {{ locale.t('publicSchedule.changeGroup', 'к выбору группы') }}
           </button>
           <p class="text-sm font-semibold text-text2">{{ data.group }}</p>

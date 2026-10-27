@@ -31,6 +31,7 @@
  * Перезагрузка WebView нового кода не принесёт: его ставит обновлялка, а не браузер.
  */
 import { isNativeApp } from '@/api/server'
+import { useLocaleStore } from '@/stores/locale'
 //Решения вынесены в чистый модуль — только его и можно проверить `node --test`.
 import { shouldReload, isChunkLoadError, chunkFailureAction, stampReloadDue, chunkReloadDue } from './buildFreshness'
 export { shouldReload, isChunkLoadError, chunkFailureAction }
@@ -116,7 +117,37 @@ export function watchForNewBuild() {
  * произошло». Здесь мы уже знаем наверняка: страница попросила файл, которого нет.
  */
 export function reloadOnChunkError(router, reload = () => window.location.reload()) {
-  router.onError((err) => { reloadOnceForChunk(err, { reload }) })
+  router.onError((err) => {
+    if (reloadOnceForChunk(err, { reload })) return
+    if (isChunkLoadError(err)) showChunkFailure(reload)
+  })
+}
+
+/**
+ * Страница не загрузилась и после перезагрузки (файла нет на сервере или нет связи).
+ * Раньше человек оставался на пустом белом экране без единого слова (живой прогон
+ * 27.10.2026, кабинет родителя). Плашка рисуется прямо в DOM, мимо Vue: дерево
+ * приложения в этот момент может быть сломано тем же отказом.
+ */
+export function showChunkFailure(reload = () => window.location.reload()) {
+  if (typeof document === 'undefined' || document.getElementById('gb-chunk-failure')) return
+  const t = (k, f) => { try { return useLocaleStore().t(k, f) } catch { return f } }
+  const box = document.createElement('div')
+  box.id = 'gb-chunk-failure'
+  box.setAttribute('role', 'alert')
+  box.style.cssText = 'position:fixed;inset:auto 16px 16px 16px;z-index:200;max-width:28rem;margin:0 auto;'
+    + 'padding:16px;border-radius:12px;background:var(--gb-card,#fff);color:var(--gb-text,#0f1b22);'
+    + 'border:1px solid var(--gb-border2,#d3dbe1);box-shadow:0 8px 30px rgba(0,0,0,.18);font:14px/1.45 inherit'
+  const text = document.createElement('p')
+  text.textContent = t('chunkFailure.text', 'Не удалось загрузить страницу. Проверьте связь с интернетом и обновите.')
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.textContent = t('chunkFailure.reload', 'Обновить')
+  btn.style.cssText = 'margin-top:10px;min-height:44px;padding:0 20px;border-radius:8px;border:0;'
+    + 'background:var(--gb-accent,#147c8b);color:#fff;font-weight:600;cursor:pointer'
+  btn.addEventListener('click', () => reload())
+  box.append(text, btn)
+  document.body.append(box)
 }
 
 /**

@@ -96,7 +96,7 @@ function remove() { emit('save', '') }        // удалить аватарку
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-back-close class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="w-full max-w-sm rounded-xl border border-border2 bg-card p-5 shadow-card">
       <h3 class="mb-4 font-title text-lg font-bold text-text">Аватарка</h3>

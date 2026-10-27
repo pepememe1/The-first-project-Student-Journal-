@@ -4,6 +4,7 @@
 // вызывающая сторона должна сама не монтировать его, пока ни один предмет не имеет ЗЕТ
 // (см. docs/done/PLAN-ZET.md §10 — «не показывать строку ЗЕТ, если поле NULL»).
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 const locale = useLocaleStore()
 defineProps({
   earned: { type: Number, required: true },
@@ -18,9 +19,9 @@ defineProps({
 
 // Подпись и цвет строки предмета — по трём состояниям (passed/pending/failed).
 const SUBJECT_STATE = {
-  passed:  { cls: 'text-accent', key: 'zetProgress.passed',    fallback: '✅ засчитаны' },
-  pending: { cls: 'text-text3',  key: 'zetProgress.awaiting',  fallback: '⏳ ожидается' },
-  failed:  { cls: 'text-red',    key: 'zetProgress.notPassed', fallback: '❌ не сдан' },
+  passed:  { cls: 'text-accent', key: 'zetProgress.passed',    fallback: 'засчитаны', icon: 'ok' },
+  pending: { cls: 'text-text3',  key: 'zetProgress.awaiting',  fallback: 'ожидается', icon: 'pending' },
+  failed:  { cls: 'text-red',    key: 'zetProgress.notPassed', fallback: 'не сдан', icon: 'fail' },
 }
 // state может отсутствовать у старых ответов (до варианта C) — тогда падаем на passed-флаг.
 function stateOf(s) { return s.state || (s.passed ? 'passed' : 'failed') }
@@ -73,7 +74,7 @@ function status(earned, total, minZet) {
         <span class="min-w-0 truncate text-text2" :title="s.subject">{{ s.subject }}</span>
         <span class="shrink-0" :class="SUBJECT_STATE[stateOf(s)].cls">
           {{ locale.t('zetProgress.zetCount', { n: s.zet }) }}
-          {{ locale.t(SUBJECT_STATE[stateOf(s)].key, SUBJECT_STATE[stateOf(s)].fallback) }}
+          <GbIcon :name="SUBJECT_STATE[stateOf(s)].icon" class="mr-0.5 inline-block size-3.5 align-[-2px]" />{{ locale.t(SUBJECT_STATE[stateOf(s)].key, SUBJECT_STATE[stateOf(s)].fallback) }}
         </span>
       </li>
     </ul>

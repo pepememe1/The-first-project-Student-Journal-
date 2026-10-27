@@ -15,6 +15,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
 import { useToast } from '@/composables/useToast'
+import GbMedal from '@/components/ui/GbMedal.vue'
 
 const locale = useLocaleStore()
 const toast = useToast()
@@ -296,7 +297,7 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
           <!-- Награждение за 1–3 место (§8.5) — медаль вместо номера. -->
           <span class="w-7 shrink-0 text-center text-sm font-bold"
                 :class="r.place <= 3 ? 'text-accent' : 'text-text3'">
-            {{ r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : r.place }}
+            <GbMedal v-if="r.place <= 3" :place="r.place" class="inline-block size-5" /><template v-else>{{ r.place }}</template>
           </span>
           <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.name }}</span>
           <span class="shrink-0 text-sm font-semibold text-accent">{{ r.score }}</span>
@@ -391,7 +392,7 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
              :class="r.place <= 3 ? 'bg-accent/10' : 'bg-bg2'">
           <span class="w-7 shrink-0 text-center text-sm font-bold"
                 :class="r.place <= 3 ? 'text-accent' : 'text-text3'">
-            {{ r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : r.place }}
+            <GbMedal v-if="r.place <= 3" :place="r.place" class="inline-block size-5" /><template v-else>{{ r.place }}</template>
           </span>
           <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.name }}</span>
           <span class="shrink-0 text-sm font-semibold tabular-nums text-accent">{{ r.score }}</span>
@@ -480,7 +481,7 @@ watch(() => act.activity?.status, (s) => { if (s === 'finished') loadBoard() })
              :class="r.place <= 3 ? 'bg-accent/10' : 'bg-bg2'">
           <span class="w-7 shrink-0 text-center text-sm font-bold"
                 :class="r.place <= 3 ? 'text-accent' : 'text-text3'">
-            {{ r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : r.place }}
+            <GbMedal v-if="r.place <= 3" :place="r.place" class="inline-block size-5" /><template v-else>{{ r.place }}</template>
           </span>
           <span class="min-w-0 flex-1 truncate text-sm text-text">{{ r.name }}</span>
           <span class="shrink-0 text-sm font-semibold tabular-nums text-accent">{{ r.score }}</span>

@@ -11,8 +11,9 @@
 // Цвет усиливается с уровнем и НИКОГДА не бывает успокаивающим: плашка появляется
 // только когда есть о чём говорить. Рядом всегда стоит подпись уровня словом —
 // значение не передаётся цветом одним.
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const props = defineProps({
   risk: { type: Object, default: null },
@@ -38,13 +39,26 @@ const subjects = computed(() =>
 // Подсказка при наведении — причины по убыванию веса: почему именно этот уровень.
 const title = computed(() => (props.risk?.factors || [])
   .map((f) => `${f.label}: ${f.detail}`).join('\n'))
+// На телефоне наводить нечем, и причины были не видны вовсе (23.10.2026): полная плашка
+// раскрывает их касанием прямо в строке. В потоке, а не всплывающим окном — ячейку
+// таблицы с прокруткой по ширине всплывающее окно обрезало бы. Компактной плашке это не
+// нужно: там, где она стоит (карточка куратора), причины и так выписаны под фамилией.
+const canOpen = computed(() => !props.compact && !!props.risk?.factors?.length)
+const open = ref(false)
 </script>
 
 <template>
-  <span v-if="risk" class="inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-semibold"
-        :class="cls" :title="title">
-    <span aria-hidden="true">🎓</span>
-    <span class="shrink-0">{{ levelText }}</span>
-    <span v-if="!compact && subjects" class="min-w-0 truncate font-normal opacity-80">· {{ subjects }}</span>
+  <span v-if="risk" class="inline-flex max-w-full flex-col items-start gap-1">
+    <component :is="canOpen ? 'button' : 'span'" :type="canOpen ? 'button' : null"
+               class="inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-semibold"
+               :class="[cls, canOpen ? 'cursor-pointer pointer-coarse:min-h-9' : '']" :title="title"
+               :aria-expanded="canOpen ? open : null" @click="canOpen && (open = !open)">
+      <GbIcon name="risk" class="size-3.5 shrink-0" />
+      <span class="shrink-0">{{ levelText }}</span>
+      <span v-if="!compact && subjects" class="min-w-0 truncate font-normal opacity-80">· {{ subjects }}</span>
+    </component>
+    <ul v-if="canOpen && open" class="flex max-w-xs flex-col gap-0.5 text-left text-xs whitespace-normal text-text2">
+      <li v-for="f in risk.factors" :key="f.code"><span class="font-semibold text-text">{{ f.label }}.</span> {{ f.detail }}</li>
+    </ul>
   </span>
 </template>

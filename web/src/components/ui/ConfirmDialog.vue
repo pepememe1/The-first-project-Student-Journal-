@@ -39,6 +39,7 @@ watch(
 <template>
   <div v-dialog
     v-if="dialogState.open"
+    data-dialog-guard="self"
     class="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
     @click.self="onCancel"
   >

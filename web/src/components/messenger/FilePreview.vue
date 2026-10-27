@@ -9,7 +9,7 @@
 // ⚠️ Это ПРЕДПРОСМОТР, а не вёрстка документа: таблицы, картинки и оформление теряются.
 // Так и задумано — задача «убедиться, что это тот файл», а не «открыть вместо Word».
 import { ref, watch, onBeforeUnmount, computed } from 'vue'
-import { X, FileText, Download, Loader2 } from '@lucide/vue'
+import { X, FileText, Download, LoaderCircle } from '@lucide/vue'
 import { messengerApi } from '@/api/endpoints'
 import { previewKind, docxText, plainText, humanSize } from '@/utils/docPreview'
 import { useLocaleStore } from '@/stores/locale'
@@ -98,7 +98,7 @@ async function download() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-back-close class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
 
@@ -120,7 +120,7 @@ async function download() {
 
       <div class="min-h-0 flex-1 overflow-auto bg-bg2">
         <p v-if="loading" class="flex items-center justify-center gap-2 py-16 text-sm text-text3">
-          <Loader2 :size="15" class="animate-spin" />
+          <LoaderCircle :size="15" class="animate-spin" />
           {{ locale.t('preview.loading', 'Открываем…') }}
         </p>
 

@@ -10,12 +10,12 @@ import { useLocaleStore } from '@/stores/locale'
 //   3) карточка себя (SidebarUserPanel) — аватар/ФИО/логин/роль/статус, компоновка Discord.
 // Из-за этого корневой aside стал flex-колонкой с overflow-y ТОЛЬКО на середине: иначе
 // карточка себя уезжала бы вверх вместе с прокруткой длинного админского меню.
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useMessengerStore } from '@/stores/messenger'
-import { NAV } from '@/config/nav'
-import { curatorApi, adminApi, meApi } from '@/api/endpoints'
+import { NAV, isNavActive } from '@/config/nav'
+import { curatorApi, adminApi } from '@/api/endpoints'
 import BrandLogo from '@/components/BrandLogo.vue'
 import SidebarUserPanel from '@/components/SidebarUserPanel.vue'
 import ConnectionBadge from '@/components/ui/ConnectionBadge.vue'
@@ -26,6 +26,7 @@ import AccessibilityMenu from '@/components/AccessibilityMenu.vue'
 import ReportProblemButton from '@/components/ReportProblemButton.vue'
 import SidebarResizer from '@/components/SidebarResizer.vue'
 import { useSidebarStore } from '@/stores/sidebar'
+import { useNavBadgesStore } from '@/stores/navBadges'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -51,25 +52,16 @@ const drawer = computed(() => !!openProp.value)
 // счётчик), остальные — из локальной карты badges (напр., накладки расписания).
 function badgeCount(key) {
   if (key === 'messagesUnread') return messenger.totalUnread
+  if (key === 'notifyUnread') return navBadges.notifyUnread
   return badges.value[key] || 0
 }
 // Пункт «Курирование» (curatorOnly) виден только преподавателю-куратору.
 const isCurator = ref(false)
-// Счётчики у пунктов меню (nav.badge → число): накладки расписания и непрочитанные
-// уведомления.
+// Счётчики у пунктов меню (nav.badge → число), которые знает только меню: накладки
+// расписания. Непрочитанные уведомления опрашивает оболочка (stores/navBadges.js): на
+// телефоне меню смонтировано, лишь пока открыта шторка, и значок там не обновлялся.
 const badges = ref({})
-let notifyTimer = null
-let onNotifyVisible = null
-/**
- * Непрочитанные уведомления для значка у пункта «Уведомления».
- * 🔎 Ручка `GET /me/events/unread-count` существовала и была объявлена в контракте, но
- * её не звал НИКТО — наш обычный класс дефекта («обещание без вызывающего»). Раз лента
- * стала отдельным разделом, значок нужен: иначе о новом письме узнают, только зайдя.
- */
-async function loadNotifyUnread() {
-  try { badges.value.notifyUnread = (await meApi.unreadCount()).data?.count || 0 }
-  catch { /* нет связи — значок просто не обновится, ломать меню незачем */ }
-}
+const navBadges = useNavBadgesStore()
 onMounted(async () => {
   if (auth.role === 'teacher') {
     try { isCurator.value = ((await curatorApi.groups()).data.groups || []).length > 0 } catch { /* */ }
@@ -78,28 +70,13 @@ onMounted(async () => {
     // Ошибку глушим намеренно: недоступная проверка расписания не повод ломать меню.
     try { badges.value.scheduleIssues = (await adminApi.scheduleConflicts()).data.count || 0 } catch { /* */ }
   }
-  loadNotifyUnread()
-  // ⚠️ Тикает РЕДКО (минута): значок «есть непрочитанные» — не чат, задержка в минуту
-  // ничего не стоит, а частый опрос на одноядерном бою стоит. Тот же расчёт, что у
-  // счётчика сообщений (20 с) — там письмо ждут сразу, здесь нет.
-  //⚠️ И молчим, пока экрана не видно: в свёрнутом приложении таймер WebView продолжает
-  //тикать, и мы будили бы радиомодуль раз в минуту при погашенном экране — ради значка,
-  //которого человек в этот момент не видит. Вернулся — обновляем сразу.
-  notifyTimer = setInterval(() => { if (!document.hidden) loadNotifyUnread() }, 60000)
-  onNotifyVisible = () => { if (!document.hidden) loadNotifyUnread() }
-  document.addEventListener('visibilitychange', onNotifyVisible)
-})
-onBeforeUnmount(() => {
-  clearInterval(notifyTimer)
-  if (onNotifyVisible) document.removeEventListener('visibilitychange', onNotifyVisible)
 })
 // Свёрнут ли до иконок. В шторке — никогда: там ширина фиксированная.
 const compact = computed(() => !drawer.value && sidebar.compact)
 const items = computed(() => (NAV[auth.role] || []).filter((it) => !it.curatorOnly || isCurator.value))
 
 function isActive(to) {
-  if (to.split('/').length <= 2) return route.path === to
-  return route.path === to || route.path.startsWith(to + '/')
+  return isNavActive(to, route.path)
 }
 
 /**
@@ -122,8 +99,11 @@ function highlighted(to) {
        свой отступ уже учитывает (`HeaderBar.vue`), а сайдбар — нет, потому что он не
        часть той же колонки. Заодно нижняя вставка спасает карточку профиля внизу от
        полосы жестов. На сайте и в десктопе обе вставки нулевые — поведение прежнее. -->
+  <!-- Шторка телефона — в rem: растёт с режимом слабовидящих, а не обрезает подписи; 17rem,
+       а не прежние 250 px, потому что кнопки для пальца стали 44 px и съели место у названия
+       и ФИО (23.10.2026). -->
   <aside class="relative flex h-full shrink-0 flex-col border-r border-border bg-bg2"
-         :class="[drawer ? 'w-[250px]' : '', sidebar.dragging ? '' : 'transition-[width] duration-150']"
+         :class="[drawer ? 'w-[min(17rem,85vw)]' : '', sidebar.dragging ? '' : 'transition-[width] duration-150']"
          :style="{ ...(drawer ? {} : { width: sidebar.width + 'px' }),
                    paddingTop: 'var(--gb-safe-top)', paddingBottom: 'var(--gb-safe-bottom)' }">
     <!-- Полоску не показываем в шторке: там ширину менять нечем и незачем. -->
@@ -163,7 +143,7 @@ function highlighted(to) {
           :title="compact ? (item.i18n ? loc.t(item.i18n, item.label) : item.label) : null"
           class="relative mb-0.5 flex rounded-sm transition-colors"
           :class="[
-            compact ? 'flex-col items-center gap-1 px-1 py-2' : 'items-center gap-2.5 px-3.5 py-2.5 text-sm',
+            compact ? 'flex-col items-center gap-1 px-1 py-2' : 'items-center gap-2.5 px-3.5 py-2.5 text-sm pointer-coarse:py-3',
             // `phoneOnly` — пункт только для узкого экрана (см. nav.js). Сейчас так
             // помечены «Настройки»: на ПК их дверь — шестерёнка в карточке себя внизу
             // слева, и дублировать её пунктом меню значило бы показать два входа в одно
@@ -184,7 +164,7 @@ function highlighted(to) {
           <span v-if="compact" class="gb-vlabel">
             {{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}
           </span>
-          <span v-else class="truncate">{{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}</span>
+          <span v-else class="min-w-0" :class="drawer ? 'wrap-break-word' : 'truncate'">{{ item.i18n ? loc.t(item.i18n, item.label) : item.label }}</span>
           <!-- Счётчик у пункта. Непрочитанные сообщения — акцентом (информация), накладки
                расписания — красным (требует вмешательства). Ноль не показываем.
                В свёрнутом виде — точкой в углу: число там нечитаемо, а факт «есть новое»
@@ -199,12 +179,19 @@ function highlighted(to) {
           </span>
         </RouterLink>
       </template>
+      <!-- В шторке телефона — в конце списка, а не прибиты книзу: при крупном шрифте три
+           закреплённых блока съедали высоту, и «Сообщения» с «Уведомлениями» уходили под
+           них без намёка, что список прокручивается (живой прогон 23.10.2026). -->
+      <template v-if="drawer">
+        <div class="px-1 pt-2"><ConnectionBadge /></div>
+        <div class="pt-1"><ReportProblemButton /></div>
+      </template>
     </nav>
 
     <!-- Режим связи — НАД карточкой себя: это состояние всего приложения, а не свойство
          аккаунта. В приложении виден всегда, на сайте появляется только при потере сети
          (см. сам компонент о том, почему постоянное «Онлайн» в браузере — шум). -->
-    <div class="shrink-0 px-3 pb-1">
+    <div v-if="!drawer" class="shrink-0 px-3 pb-1">
       <ConnectionBadge v-if="!compact" />
     </div>
 
@@ -230,7 +217,7 @@ function highlighted(to) {
     <!-- «Сообщить о проблеме» — встроенный канал обратной связи (ClassDojo, §9 №3).
          Над карточкой себя, спокойным стилем: действие редкое, но должно быть под рукой
          из любого раздела. Админу компонент себя не рисует (он и есть модерация). -->
-    <div class="shrink-0 px-2.5 pb-1">
+    <div v-if="!drawer" class="shrink-0 px-2.5 pb-1">
       <ReportProblemButton />
     </div>
 

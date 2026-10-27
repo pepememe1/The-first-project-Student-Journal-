@@ -80,6 +80,20 @@ jobs:
           done
       - run: python -m compileall -q desktop sync data server/app *.py
 
+  # Соавтор из трейлера Co-Authored-By попадает в контрибьюторы репозитория. У
+  # разработчиков тот же скрипт стоит хуком (git config core.hooksPath tools/git-hooks),
+  # здесь он ловит коммиты, сделанные без хука, например из облачной сессии.
+  # Отдельной задачей, а не шагом в «Безопасности»: та красная, пока не отозван старый
+  # ключ (.gitleaksignore), и эта проверка утонула бы в её постоянном красном.
+  attribution:
+    name: Нет подписи ИИ в истории ветки
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # проверяется вся история ветки, а не последний коммит
+      - run: sh tools/git-hooks/commit-msg --range HEAD
+
   lint-python:
     name: Линтер Python (ruff)
     runs-on: ubuntu-latest

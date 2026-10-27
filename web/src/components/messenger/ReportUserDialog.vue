@@ -44,17 +44,19 @@ const FIELDS = [
   ['banner', 'Баннер'],
 ]
 
-const reason = ref('harassment')
+// Причину выбирают сами: с готовым значением жалоба уходила с причиной, которую человек
+// не выбирал (живой прогон 27.10.2026).
+const reason = ref('')
 const field = ref('profile')
 const description = ref('')
 
 watch(() => props.open, (v) => {
   if (!v) return
-  reason.value = 'harassment'; field.value = 'profile'; description.value = ''
+  reason.value = ''; field.value = 'profile'; description.value = ''
 })
 
 function submit() {
-  if (props.busy) return
+  if (props.busy || !reason.value) return
   emit('submit', { reasonCode: reason.value, field: field.value,
                    description: description.value.trim() })
 }
@@ -94,6 +96,7 @@ function submit() {
         </span>
         <select v-model="reason"
                 class="w-full rounded-lg border border-border2 bg-bg2 px-3 py-2 text-sm text-text">
+          <option value="" disabled>{{ locale.t('reportUser.pickReason', 'Выберите причину') }}</option>
           <option v-for="([v, label]) in REASONS" :key="v" :value="v">{{ label }}</option>
         </select>
       </label>
@@ -121,7 +124,7 @@ function submit() {
                 class="rounded-lg border border-border2 px-3 py-1.5 text-sm text-text2 hover:bg-bg2">
           {{ locale.t('common.cancel', 'Отмена') }}
         </button>
-        <button type="button" @click="submit" :disabled="busy"
+        <button type="button" @click="submit" :disabled="busy || !reason"
                 class="rounded-lg bg-red px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40">
           {{ locale.t('reportUser.send', 'Отправить жалобу') }}
         </button>

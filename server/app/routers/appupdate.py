@@ -31,8 +31,12 @@ URL бандла подставляется от адреса текущего �
 ⚠️ Полная закачка НИКУДА НЕ ДЕЛАСЬ: `url` с целым zip остаётся в ответе всегда. Манифест
 для плагина — это ускорение, а не замена; старые сборки приложения поля просто не видят
 и работают как раньше.
+
+С 4.1 (подпись F-24) приложение брало только подписанную сумму архива, а список файлов
+подписан не был — и пофайловая докачка не работала вовсе. С 23.10.2026 выпуск подписывает
+и отпечаток списка (`files_sig`, `ota_files.py`); список считается тем же `zip_file_list`,
+что и при подписи, иначе отпечаток не сойдётся.
 """
-import hashlib
 import json
 import os
 import zipfile
@@ -40,6 +44,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
+
+import ota_files
 
 router = APIRouter(prefix="/app", tags=["app-update"])
 
@@ -108,17 +114,8 @@ def _file_manifest(zip_path: Path, version: str, base: str) -> list | None:
         except (OSError, ValueError, KeyError, TypeError):
             pass                      # битый кэш — просто пересчитаем
 
-    files = []
     try:
-        with zipfile.ZipFile(zip_path) as z:
-            for info in z.infolist():
-                if info.is_dir():
-                    continue
-                digest = hashlib.sha256()
-                with z.open(info) as fh:
-                    for chunk in iter(lambda: fh.read(1024 * 256), b""):
-                        digest.update(chunk)
-                files.append({"n": info.filename, "h": digest.hexdigest()})
+        files = [{"n": name, "h": h} for name, h in ota_files.zip_file_list(zip_path)]
     except (OSError, zipfile.BadZipFile):
         return None
     try:
@@ -162,6 +159,10 @@ def updates(request: Request):
         files = _file_manifest(zip_path, str(data["version"]), base)
         if files:
             out["manifest"] = files
+            #Подпись отпечатка этого списка: без неё приложение список не возьмёт и
+            #скачает архив целиком под подписью `sig` (otaVerify.js).
+            if data.get("files_sig"):
+                out["files_sig"] = data["files_sig"]
     return JSONResponse(out)
 
 

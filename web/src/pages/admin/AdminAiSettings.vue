@@ -9,6 +9,7 @@ import { adminApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
 
@@ -40,11 +41,11 @@ const SCOPES = ['GIGACHAT_API_PERS', 'GIGACHAT_API_B2B', 'GIGACHAT_API_CORP']
 // Голосовой ввод: чем распознавать речь. Три режима — см. `_STT_MODES` на сервере.
 const STT_MODES = computed(() => [
   { id: 'auto', name: locale.t('adminAiSettings.stt.auto.name', 'Автоматически (рекомендуется)'),
-    hint: locale.t('adminAiSettings.stt.auto.hint', 'Whisper — там, где он установлен; на остальных машинах распознаёт браузер. Никого не заставляет ничего скачивать.') },
+    hint: locale.t('adminAiSettings.stt.auto.hint', 'Whisper — там, где он установлен; где его нет, голосовой ввод выключен. Звук не уходит за пределы ваших машин.') },
   { id: 'server', name: locale.t('adminAiSettings.stt.server.name', 'OpenAI Whisper на сервере — для всех'),
     hint: locale.t('adminAiSettings.stt.server.hint', 'Звук распознаёт только наш сервер, наружу не уходит. Требует машину с видеокартой: на нынешнем хостинге движок не поместится.') },
   { id: 'browser', name: locale.t('adminAiSettings.stt.browser.name', 'Обычный голосовой ввод (браузер)'),
-    hint: locale.t('adminAiSettings.stt.browser.hint', 'Распознаёт браузер (Chrome/Edge) силами Google. Нагрузки на сервер нет, но звук уходит третьей стороне.') },
+    hint: locale.t('adminAiSettings.stt.browser.hint', 'Распознаёт браузер облачным сервисом своего производителя (Chrome — Google, Edge — Microsoft). Нагрузки на сервер нет, но голос с фамилиями студентов уходит третьей стороне.') },
 ])
 const inputCls =
   'h-11 w-full rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none transition-colors focus:border-accent focus:bg-card'
@@ -142,10 +143,10 @@ async function test() {
       <div class="mt-3 rounded-md border px-3 py-2.5 text-xs"
            :class="cfg.stt_installed ? 'border-accent/40 text-text2' : 'border-orange/40 text-text2'">
         <template v-if="cfg.stt_installed">
-          {{ locale.t('adminAiSettings.sttInstalledYes', '✅ Whisper установлен на этом сервере — режим «для всех» будет работать.') }}
+          <GbIcon name="ok" class="mr-1 inline-block size-4 align-[-3px]" />{{ locale.t('adminAiSettings.sttInstalledYes', 'Whisper установлен на этом сервере — режим «для всех» будет работать.') }}
         </template>
         <template v-else>
-          {{ locale.t('adminAiSettings.sttInstalledNo', '⚠️ Whisper на этом сервере не установлен. Режим «для всех» станет доступен, когда журнал переедет на машину колледжа с видеокартой — до тех пор он честно покажет пользователям, что распознавание недоступно, а не подменит его тихо браузерным.') }}
+          <GbIcon name="warn" class="mr-1 inline-block size-4 align-[-3px]" />{{ locale.t('adminAiSettings.sttInstalledNo', 'Whisper на этом сервере не установлен. Режим «для всех» станет доступен, когда журнал переедет на машину колледжа с видеокартой — до тех пор он честно покажет пользователям, что распознавание недоступно, а не подменит его тихо браузерным.') }}
         </template>
       </div>
     </Card>

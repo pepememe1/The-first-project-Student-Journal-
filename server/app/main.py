@@ -32,6 +32,7 @@ from .routers import webauthn_router
 from .routers import mfa as mfa_router
 from .routers import account as account_router
 from .routers import appupdate
+from .routers import clientreport
 from .routers import desktopupdate
 from .routers import publicschedule
 from .routers import serverinfo
@@ -361,6 +362,7 @@ app.include_router(messenger.mod_router)   # модерация мессендж
 #Никаких данных журнала здесь нет и быть не должно — см. предупреждение в самом файле.
 app.include_router(publicschedule.router)
 app.include_router(appupdate.router)   # OTA-обновления приложения (до SPA-катч-олла)
+app.include_router(clientreport.router)   # ошибки интерфейса и время старта от клиентов
 app.include_router(desktopupdate.router)   # автообновление десктопа (манифест; файлы — /downloads)
 #Раздел «Сервер» — ТОЛЬКО ПРОСМОТР. Управление (SSH, команды, перенос) живёт в
 #desktop/server_admin.py и подключается лишь к локальному серверу программы: на боевой

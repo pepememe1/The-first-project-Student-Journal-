@@ -6,9 +6,11 @@
 // Здесь же — выход из группы/канала и удаление переписки у себя.
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
-import { X, Crown, Trash2, LogOut, Users, ShieldCheck, Pencil, Check, MoreVertical,
+import {
+         X, Crown, Trash2, LogOut, Users, ShieldCheck, Pencil, Check, EllipsisVertical,
          UserPlus, Bell, BellOff, Search, Image, Star, FileText, ScrollText, Camera,
-         SquareKanban } from '@lucide/vue'
+         SquareKanban,
+} from '@lucide/vue'
 import AvatarCropper from '@/components/AvatarCropper.vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
@@ -32,6 +34,7 @@ import { profilePlate } from '@/theme/palette'
 import { useLocaleStore } from '@/stores/locale'
 import { collegeDayKey, formatCollege } from '@/utils/collegeTime'
 import { mediaSrc } from '@/utils/mediaSrc'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const emit = defineEmits(['close', 'search', 'summary', 'open-file'])
 const m = useMessengerStore()
@@ -412,7 +415,7 @@ function onChatAction(action) {
           <!-- ЛС с администратором — другой контекст переписки, поясняем границы. -->
           <div v-if="activePeer.role === 'admin'" class="mt-3 rounded-lg border border-border bg-card2 p-3 text-sm text-text2">
             <p class="mb-1 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('profilePanel.notHere', 'Лучше не сюда') }}</p>
-            {{ locale.t('conversationInfo.notHereShort', 'Жалобы на пользователей — через «Модерация» (кнопка ⚙ у чата). Учебные вопросы (оценки, расписание) — своему куратору или преподавателю.') }}
+            {{ locale.t('conversationInfo.notHereShort', 'Жалобы на пользователей — через «Модерация» (шестерёнка у чата). Учебные вопросы (оценки, расписание) — своему куратору или преподавателю.') }}
           </div>
         </div>
         <SharedGroupsChannels :user-id="activePeer.id" class="hidden sm:block" @navigate="emit('close')" />
@@ -438,7 +441,7 @@ function onChatAction(action) {
         <!-- В «Избранном» карточки «собеседника» нет: это ты сам. -->
         <p v-if="isSaved" class="text-sm text-text2">
           {{ locale.t('conversationInfo.savedHint1', 'Личные заметки: ссылки, файлы и мысли для себя. Здесь же работает команда') }}
-          <span class="font-semibold text-accent">/vector</span> {{ locale.t('conversationInfo.savedHint2', '— спросить ИИ-помощника.') }}
+          <span class="font-semibold text-accent">/vector</span> {{ locale.t('conversationInfo.savedHint2', '— спросить Вектора, помощника журнала.') }}
         </p>
         <!-- Модерация раньше рендерилась как обычная карточка собеседника (activePeer =
              {full_name:'Модерация', role:'moderation'}) — тоже падала в «Студент». -->
@@ -471,7 +474,7 @@ function onChatAction(action) {
             <div class="relative">
               <button type="button" @click="moreOpen = !moreOpen"
                       class="flex w-full flex-col items-center gap-1 rounded-xl bg-card2 py-2.5 text-xs text-accent transition-colors hover:bg-bg2">
-                <MoreVertical class="size-5" />
+                <EllipsisVertical class="size-5" />
                 {{ locale.t('conversationInfo.more', 'ещё') }}
               </button>
               <!-- «Ещё»: редкие и необратимые действия. Держать удаление переписки на
@@ -638,7 +641,7 @@ function onChatAction(action) {
                     <GroupTag :group="studentGroup(p)" />
                     <Crown v-if="p.user_id === ownerId || p.role === 'owner'"
                            class="size-3.5 shrink-0 text-accent" :aria-label="locale.t('conversationInfo.owner', 'Владелец')" />
-                    <span v-if="p.silenced" :title="locale.t('conversationInfo.silencedHint', 'Заглушён(а) — /mute')" class="shrink-0 text-xs">🔇</span>
+                    <span v-if="p.silenced" :title="locale.t('conversationInfo.silencedHint', 'Заглушён(а) — /mute')" class="shrink-0 text-text3"><GbIcon name="silenced" class="size-3.5" /></span>
                   </div>
                   <div class="flex items-center gap-1.5 truncate text-[11px] text-text3">
                     <!-- Статус участника — тем же кружком, что и в карточке собеседника. -->
@@ -657,9 +660,9 @@ function onChatAction(action) {
                    кик/роль — по правам. Себя выгнать/игнорировать нельзя из этого меню. -->
               <button v-if="p.user_id !== myUserId" type="button" data-role-menu @click.stop="toggleMenu(p.user_id)"
                       :aria-label="locale.t('messenger.actions', 'Действия')" class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
-                <MoreVertical class="size-4" />
+                <EllipsisVertical class="size-4" />
               </button>
-              <div v-if="openMenuFor === p.user_id" data-role-menu
+              <div v-if="openMenuFor === p.user_id" v-back-close="() => (openMenuFor = null)" data-role-menu
                    class="absolute right-2 top-10 z-10 w-44 rounded-lg border border-border2 bg-card p-1 shadow-card">
                 <button type="button" @click="toggleIgnore(p)"
                         class="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-text2 hover:bg-bg2">

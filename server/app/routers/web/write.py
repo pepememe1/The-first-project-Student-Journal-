@@ -26,9 +26,9 @@ _hook_log = _logging.getLogger("gradebook.hooks")   #сбои хуков пос�
 @router.post("/teacher/grade")
 def teacher_set_grade(payload: dict = Body(...),
                       user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Преподаватель выставляет/меняет/снимает оценку. id грейда = «f|n|lesson_id»
-    (как в sync_engine) → десктоп получит её через pull. Пустой grade = снять оценку
-    (надгробие). Пишем только по СВОЕМУ предмету и студенту своей группы (row-level)."""
+    """Преподаватель выставляет, меняет или снимает оценку. Ключ — `models.grade_id`
+    по неизменяемому `student_id`; программы получат правку через pull. Пустой grade —
+    снять оценку (надгробие). Пишем только по своему предмету и студенту своей группы."""
     _require("teacher", user)
     surname = (payload.get("surname") or "").strip()
     name = (payload.get("name") or "").strip()
@@ -734,16 +734,31 @@ def _rekey_student_grades(db: Session, old_f: str, old_n: str,
     return touched
 
 
+def _student_for_write(db: Session, login: str, sid: str) -> User:
+    """Студент для правки или удаления: по логину (id=stud:login) или, у студента без
+    логина, по его id `stud:u:…` (§4.10). Раньше такого студента нельзя было ни
+    изменить, ни удалить: ключ собирался из пустого логина. `sid` принимается только
+    в этом виде — им нельзя дотянуться до чужой учётной записи с логином."""
+    if sid:
+        if not sid.startswith("stud:u:"):
+            raise HTTPException(status_code=400, detail="sid — только для студента без логина")
+        row = db.get(User, sid)
+    else:
+        row = db.get(User, f"stud:{login}")
+    if row is None or row.deleted or row.role != "student":
+        raise HTTPException(status_code=404, detail="Студент не найден")
+    return row
+
+
 @router.put("/admin/students/{login}")
-def admin_update_student(login: str, payload: dict = Body(...),
+def admin_update_student(login: str, payload: dict = Body(...), sid: str = Query(""),
                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Правка студента. Логин — ключ (id=stud:login), его не меняем: смена логина = это
     другой студент (создайте нового). Меняем ФИО/группу/пароль. Пустой пароль —
-    оставляем прежний хеш. При смене ФИО ОЦЕНКИ ПЕРЕКЛЮЧАЮТСЯ на новый ключ."""
-    sid = f"stud:{login}"
-    row = db.get(User, sid)
-    if row is None or row.deleted:
-        raise HTTPException(status_code=404, detail="Студент не найден")
+    оставляем прежний хеш. При смене ФИО ОЦЕНКИ ПЕРЕКЛЮЧАЮТСЯ на новый ключ.
+    Студента без логина клиент правит по `sid`, в пути тогда заглушка «-»."""
+    row = _student_for_write(db, login, sid)
+    login = row.login or row.id
     old_f, old_n = row.surname or "", row.name or ""
     from ... import person_rules as PR
     bad = PR.first_problem(
@@ -799,14 +814,12 @@ def admin_update_student(login: str, payload: dict = Body(...),
 
 
 @router.delete("/admin/students/{login}")
-def admin_delete_student(login: str,
+def admin_delete_student(login: str, sid: str = Query(""),
                          _admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Мягкое удаление студента (надгробие deleted=1): удаление доедет до десктопа и
     других клиентов через pull, а не «воскреснет» на следующем синке."""
-    sid = f"stud:{login}"
-    row = db.get(User, sid)
-    if row is None or row.deleted:
-        raise HTTPException(status_code=404, detail="Студент не найден")
+    row = _student_for_write(db, login, sid)
+    login = row.login or row.id
     row.deleted = True
     row.updated_at = _now_iso()
     db.commit()

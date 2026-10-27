@@ -262,10 +262,13 @@ export const adminApi = {
   subjects: () => api.get('/web/admin/subjects'),
   // CRUD студентов (Phase B). id на сервере = stud:login (как в синке десктопа).
   createStudent: (payload) => api.post('/web/admin/students', payload),
-  updateStudent: (login, payload) =>
-    api.put(`/web/admin/students/${encodeURIComponent(login)}`, payload),
-  deleteStudent: (login) =>
-    api.delete(`/web/admin/students/${encodeURIComponent(login)}`),
+  // Студента без логина (id stud:u:…) правят и удаляют по sid, в пути — заглушка «-».
+  updateStudent: (login, payload, sid = '') =>
+    api.put(`/web/admin/students/${encodeURIComponent(login || '-')}`, payload,
+      sid ? { params: { sid } } : undefined),
+  deleteStudent: (login, sid = '') =>
+    api.delete(`/web/admin/students/${encodeURIComponent(login || '-')}`,
+      sid ? { params: { sid } } : undefined),
   // CRUD групп и предметов (Phase B).
   createGroup: (payload) => api.post('/web/admin/groups', payload),
   updateGroup: (name, payload) => api.put(`/web/admin/groups/${encodeURIComponent(name)}`, payload),

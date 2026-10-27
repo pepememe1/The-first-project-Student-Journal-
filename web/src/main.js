@@ -1,17 +1,26 @@
 import { createApp } from 'vue'
 import { vDialog } from './directives/dialog'
+import { vBackClose } from './utils/backLayers'
 import { createPinia } from 'pinia'
 import { Capacitor } from '@capacitor/core'
 import './style.css'
 import App from './App.vue'
 import { router } from './router'
+import { HOME_BY_ROLE } from './config/nav'
+import { installBackButton } from './utils/backButton'
+import { installClientReport, reportOrigin } from './utils/clientReport'
+import { isDesktopApp } from './utils/platform'
+import { publicSiteOrigin } from './api/server'
 import { useThemeStore } from './stores/theme'
 import { useA11yStore } from './stores/a11y'
+import { useAuthStore } from './stores/auth'
 
 const app = createApp(App)
 app.use(createPinia())
 //Окна: роль, удержание фокуса, возврат фокуса (доступность, см. directives/dialog.js).
 app.directive('dialog', vDialog)
+//Панели, которые закрывает кнопка «назад» на телефоне (utils/backLayers.js).
+app.directive('back-close', vBackClose)
 
 // Живой баг («вкладка иногда не загружается, помогает только F5» — повторился и после
 // фикса :duration в AppShell.vue): БЕЗ глобального обработчика необработанная ошибка
@@ -23,6 +32,19 @@ app.directive('dialog', vDialog)
 app.config.errorHandler = (err, instance, info) => {
   const name = instance?.type?.__name || instance?.type?.name || 'unknown'
   console.error(`[app] необработанная ошибка в компоненте "${name}" (${info}):`, err)
+}
+
+//Консоль на телефоне студента не видит никто: ошибки и время старта уходят и на сервер,
+//без ПДн (utils/clientReport.js). Обработчик выше остаётся, отчёт добавляется к нему.
+//Под `vite dev` не шлём: для localhost боевой адрес — это бой, и ошибки разработки
+//смешались бы с настоящими.
+if (!import.meta.env.DEV) {
+  installClientReport(app, router, {
+    platform: Capacitor.getPlatform() === 'android' ? 'android' : (isDesktopApp() ? 'desktop' : 'web'),
+    version: import.meta.env.VITE_OTA_VERSION || BUILD_STAMP,
+    origin: reportOrigin({ desktop: isDesktopApp(), native: Capacitor.isNativePlatform(),
+                           here: location.origin, publicOrigin: publicSiteOrigin() }),
+  })
 }
 
 // Тему применяем ДО монтирования (и до router), чтобы не мигал светлый кадр.
@@ -40,7 +62,7 @@ app.use(router)
 // деплой уносит старые файлы — вкладка, открытая до выкладки, на первом же переходе
 // получает 404 и молча остаётся на месте. Ловим оба конца: замечаем новую сборку
 // заранее и чиним уже случившийся отказ. Подробности — utils/appVersion.js.
-import { watchForNewBuild, reloadOnChunkError } from '@/utils/appVersion'
+import { watchForNewBuild, reloadOnChunkError, BUILD_STAMP } from '@/utils/appVersion'
 reloadOnChunkError(router)
 watchForNewBuild()
 // 🔊 Разблокировка звука. Браузер разрешает воспроизведение только после жеста человека,
@@ -79,6 +101,10 @@ app.mount('#app')
 // подпись манифеста проверяется ключом, вшитым в приложение (`utils/otaVerify.js`, аудит
 // F-24). Старые APK обновляются сами, как раньше, — их нативный конфиг не поменять.
 if (Capacitor.isNativePlatform()) {
+  //Системная «назад»: окно → главный экран → свернуть (utils/backButton.js).
+  installBackButton(router, ['/', '/login', ...Object.values(HOME_BY_ROLE)])
+    .catch((e) => console.error('[app] кнопка «назад» не подключилась:', e))
+
   import('@capgo/capacitor-updater')
     .then(async ({ CapacitorUpdater }) => {
       await CapacitorUpdater.notifyAppReady()
@@ -134,7 +160,9 @@ if (Capacitor.isNativePlatform()) {
   import('./services/push')
     .then(async (push) => {
       push.onNotificationTap(router)
-      await push.registerToken()
+      //Без входа подтверждать нечего: сервер ответит 401. После входа токен
+      //регистрирует сам вход (stores/auth.js).
+      if (useAuthStore().isAuthenticated) await push.registerToken()
       await push.consumePendingEvent(router)
     })
     .catch(() => { /* вне приложения моста нет — это норма */ })

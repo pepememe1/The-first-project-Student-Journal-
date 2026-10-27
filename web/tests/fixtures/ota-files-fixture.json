@@ -1,0 +1,36 @@
+{
+  "_comment": "Образец подписи списка файлов OTA (пофайловое обновление), сделанный tools/sign_ota.py одноразовым ключом (закрытая половина выброшена). Его проверяют ОБЕ стороны: tests/test_ota_signing.py и web/tests/otaVerify.test.mjs — отпечаток списка и строка подписи в питоне и в приложении не разойдутся молча. Порядок файлов не отсортирован и один хеш заглавными — отпечаток от этого зависеть не должен.",
+  "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEII/DS7ONF4k3ii7WHeMa6wnIIFdcSVtTexiyXRq/pmWURBYAjx++3y0cTv8m06yOr2qGhm/92p9JwPHwv9VEnw==",
+  "version": "1.261023.1200",
+  "checksum": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "sig": "IZPJ/EIrfwR/fAXx+19mVCJmNR57Bw1OY02oWZj3seyNS5uQ19hiRjiDcvGm0zVFWfIZh9zasegJVtLaox+rMw==",
+  "manifest": [
+    {
+      "file_name": "index.html",
+      "file_hash": "0eb547304658805aad788d320f10bf1f292797b5e6d745a3bf617584da017051",
+      "download_url": "https://example.invalid/app/files/1.261023.1200/index.html"
+    },
+    {
+      "file_name": "assets/index-Ab12.js",
+      "file_hash": "A35E38644CF094DF06419BB3DDA391FBD5140288E905D3B2BCC38E0AACFB4A53",
+      "download_url": "https://example.invalid/app/files/1.261023.1200/assets/index-Ab12.js"
+    },
+    {
+      "file_name": "assets/Vector-Zz9.css",
+      "file_hash": "eab22e08b72ca3f79cbe1f0dcdbc9fdb20fadbee08c083a375777324cdd5b347",
+      "download_url": "https://example.invalid/app/files/1.261023.1200/assets/Vector-Zz9.css"
+    },
+    {
+      "file_name": "sw.js",
+      "file_hash": "4bf19ba58dc8ea29d3977699ebcb1aaf2bc12441939754be7038e7fd13141ce0",
+      "download_url": "https://example.invalid/app/files/1.261023.1200/sw.js"
+    },
+    {
+      "file_name": "assets/a_b-1.webp",
+      "file_hash": "152f248c8d7c0406085bf490cac6306fb0161ff2878681354e7f182e30f1b0b8",
+      "download_url": "https://example.invalid/app/files/1.261023.1200/assets/a_b-1.webp"
+    }
+  ],
+  "digest": "da183889dc5eb563b113e2d28c44f9202a76f4936585ad7ec693cfcaa1d802de",
+  "files_sig": "BBzPMpXZK+ojGFl2iGzNYsp3iUT1DsgsVkB7E/ebyMCO8ufnAEfccml8ihX9xLsaUaGazTOZTkxwF7HmUls9RA=="
+}

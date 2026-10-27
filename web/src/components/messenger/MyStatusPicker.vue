@@ -40,7 +40,11 @@ async function saveText() {
 <template>
   <div class="relative">
     <button type="button" @click="open = !open"
-            class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text2 hover:bg-bg2">
+            class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text2 hover:bg-bg2 pointer-coarse:py-2.5"
+            :aria-label="locale.t('header.myStatusLabel', 'Ваш статус') + ': ' + current.self">
+      <!-- Подпись «Ваш статус»: без неё строка под поиском читалась как фильтр списка,
+           а не как то, что видят о тебе другие (живой прогон 23.10.2026). -->
+      <span class="text-text3">{{ locale.t('header.myStatusLabel', 'Ваш статус') }}:</span>
       <span class="size-2.5 rounded-full" :style="{ background: current.color }" />
       {{ current.self }}
       <ChevronDown class="size-3.5" />
@@ -62,6 +66,6 @@ async function saveText() {
         </button>
       </div>
     </div>
-    <div v-if="open" class="fixed inset-0 z-10" @click="open = false" />
+    <div v-back-close v-if="open" class="fixed inset-0 z-10" @click="open = false" />
   </div>
 </template>

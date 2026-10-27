@@ -11,7 +11,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { meApi, messengerApi } from '@/api/endpoints'
-import { isDesktopApp } from '@/utils/platform'
+import { isPcProgram } from '@/utils/platform'
 import { prefetchImages } from '@/utils/mediaSrc'
 
 //Категории и первая страница «В тренде» одинаковы для всех и меняются медленно: держим их
@@ -104,7 +104,7 @@ export const useGifStore = defineStore('gif', () => {
   // программы в приватном режиме, и без этого каждый запуск начинался с пустого пикера.
   // Один раз за вход; неудача — попробуем при следующем открытии мессенджера.
   async function warmup() {
-    if (warmed || !isDesktopApp()) return
+    if (warmed || !isPcProgram()) return
     warmed = true
     try {
       await load()

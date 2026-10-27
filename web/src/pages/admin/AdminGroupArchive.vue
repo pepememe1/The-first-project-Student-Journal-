@@ -11,7 +11,7 @@
 // ⚠️ Имя группы уходит на сервер ПАРАМЕТРОМ и в ТЕЛЕ, никогда не сегментом пути:
 // Starlette раскодирует `%2F` до роутинга, и «К74/1» разваливает маршрут.
 import { ref, onMounted } from 'vue'
-import { Archive, RotateCcw, RefreshCw, Users, BookOpen, GraduationCap } from '@lucide/vue'
+import { Archive, RotateCcw, RotateCw, Users, BookOpen, GraduationCap } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -72,7 +72,7 @@ onMounted(load)
         </p>
       </div>
       <button class="gb-btn gb-btn-ghost" :disabled="busy === '*'" @click="witness">
-        <RefreshCw :size="16" /> {{ locale.t('groupArchive.witness', 'Запомнить текущие курсы') }}
+        <RotateCw :size="16" /> {{ locale.t('groupArchive.witness', 'Запомнить текущие курсы') }}
       </button>
     </div>
 

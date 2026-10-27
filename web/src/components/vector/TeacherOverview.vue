@@ -19,6 +19,7 @@ import { RotateCw, PieChart, ChevronDown } from '@lucide/vue'
 import { teacherApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import TeacherSubjectsOverlay from '@/components/vector/TeacherSubjectsOverlay.vue'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
 const MAX_SCORE = 5
@@ -132,7 +133,7 @@ const hasData = computed(() => groups.value.length > 0 || curatorGroups.value.le
             <!-- Зона риска: плашка появляется, ТОЛЬКО если такие студенты есть. «В зоне
                  риска: 0» — строка, которая ничего не сообщает, но занимает место. -->
             <p v-if="g.at_risk" class="mt-1.5 rounded-md border border-red/30 bg-red/10 px-2 py-1 text-[11px] font-semibold text-red">
-              🎓 {{ locale.t('teacherOverview.atRiskOwn', { n: g.at_risk }) }}
+              <GbIcon name="risk" class="inline-block size-3.5 align-[-2px]" /> {{ locale.t('teacherOverview.atRiskOwn', { n: g.at_risk }) }}
             </p>
 
             <ul class="mt-2 flex flex-col gap-2.5">
@@ -184,7 +185,7 @@ const hasData = computed(() => groups.value.length > 0 || curatorGroups.value.le
                            :class="expandedCurator.has(g.group) ? 'rotate-180' : ''" />
             </button>
             <p v-if="g.at_risk" class="mt-1.5 rounded-md border border-red/30 bg-red/10 px-2 py-1 text-[11px] font-semibold text-red">
-              🎓 {{ locale.t('teacherOverview.atRiskAll', { n: g.at_risk }) }}
+              <GbIcon name="risk" class="inline-block size-3.5 align-[-2px]" /> {{ locale.t('teacherOverview.atRiskAll', { n: g.at_risk }) }}
             </p>
             <ul v-if="expandedCurator.has(g.group)" class="mt-2 flex flex-col gap-2.5">
               <li v-for="s in g.subjects" :key="s.subject">

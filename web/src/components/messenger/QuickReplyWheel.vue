@@ -27,6 +27,7 @@ import { computed, ref } from 'vue'
 import { X } from '@lucide/vue'
 import { C, HALF as half, pt, sectorPath } from '@/utils/wheelGeometry'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const props = defineProps({
   // [{ id, text, removable }] — общий набор + личные шаблоны преподавателя.
@@ -76,7 +77,7 @@ const labelWidth = computed(() => {
   <!-- Оверлей ПРОЗРАЧНЫЙ и без карточки — как у колеса активностей: рамка вокруг
        радиального меню возвращает ему вид «окна с настройками», от которого и уходили.
        Но кликабельный: сквозные клики попадали бы по кнопкам под колесом. -->
-  <div class="fixed inset-0 z-50 grid place-items-center p-4"
+  <div v-back-close class="fixed inset-0 z-50 grid place-items-center p-4"
        style="background: var(--gb-overlay)"
        @click.self="emit('close')" @keydown.esc="emit('close')">
     <div class="flex w-full max-w-[420px] flex-col items-center gap-3">
@@ -125,7 +126,7 @@ const labelWidth = computed(() => {
         <button v-for="it in items.filter(i => i.removable)" :key="`rm-${it.id}`" type="button"
                 @click="emit('remove', it)"
                 class="rounded-full border border-border2 bg-card px-2.5 py-1 text-[11px] text-text3 hover:text-red">
-          ✕ {{ it.text }}
+          <GbIcon name="remove" class="inline-block size-3.5 align-[-2px]" /> {{ it.text }}
         </button>
       </div>
     </div>

@@ -31,12 +31,14 @@ import { practiceAverage, scaleValues, toFivePoint, groupAverage as groupAverage
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import MicButton from '@/components/vector/MicButton.vue'
+import GradePicker from '@/components/teacher/GradePicker.vue'
 import VoiceCommandDialog from '@/components/vector/VoiceCommandDialog.vue'
 import { useLocaleStore } from '@/stores/locale'
 import haptics from '@/utils/haptics'
 import { useAuthStore } from '@/stores/auth'
 import { recallChoice, rememberChoice, pickRemembered } from '@/utils/lastChoice'
 import { addDays, collegeDdmmyyyy, collegeHhmm } from '@/utils/collegeTime'
+import GbIcon from '@/components/ui/GbIcon.vue'
 import { parseRuDate, lessonDateIssue, lessonMarkCount, duplicateLesson, lessonNumberOk }
   from '@/utils/lessonChecks'
 
@@ -336,9 +338,53 @@ function flushKeyBuffer() {
 // первым молча.
 const keyboardInput = isHandheld() ? false : true
 
+// ── Выбор оценки пальцем (23.10.2026) ─────────────────────────────────────────────
+// На телефоне ячейка — кнопка, открывающая свой лист (GradePicker.vue), а не `<select>`:
+// Android рисует его белым системным списком без подсказок, чужим приложению (Ярослав).
+// Признак тот же, что у клавиатурного ввода выше: где ввода с клавиатуры нет, там лист.
+const touchPicker = !keyboardInput
+const picker = ref(null)          //{ s, col } — чья ячейка открыта
+function openPicker(s, col) { picker.value = { s, col } }
+function pickerSubtitle(col) {
+  if (col.ri > 0) return `${locale.t('teacherJournal.retakeNumber', { n: col.ri })} · ${retakeDate(col.l, col.ri)}`
+  return `${col.l.type} №${col.l.number}${col.l.date ? ' · ' + col.l.date : ''}`
+}
+function onPick(value) {
+  const { s, col } = picker.value || {}
+  picker.value = null
+  if (s && col) onCell(s, col, value)
+}
+
+// Стрелки ходят по клеткам, как в таблице, а не листают значения списка: у `<select>`
+// стрелка вверх-вниз сразу меняла и сохраняла оценку соседнего значения (живой прогон
+// 27.10.2026) — одно неловкое нажатие правило журнал. Оценку ставит цифра или Alt+↓.
+const ARROWS = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }
+function moveCell(target, [dr, dc]) {
+  const cell = target.closest('td')
+  const row = cell?.parentElement
+  if (!row) return
+  if (dc) {
+    const cells = [...row.querySelectorAll('select')].filter((x) => !x.disabled)
+    cells[cells.indexOf(target) + dc]?.focus()
+    return
+  }
+  const idx = Array.prototype.indexOf.call(row.children, cell)
+  for (let r = dr > 0 ? row.nextElementSibling : row.previousElementSibling; r;
+    r = dr > 0 ? r.nextElementSibling : r.previousElementSibling) {
+    const next = r.children[idx]?.querySelector('select')
+    if (next && !next.disabled) { next.focus(); return }
+  }
+}
+
 function onCellKey(s, col, e) {
   if (!keyboardInput) return                           //телефон — клавиатурного ввода нет
   if (e.ctrlKey || e.altKey || e.metaKey) return       //сочетания — не наш ввод
+  if (ARROWS[e.key]) {
+    e.preventDefault()
+    if (keyBufferOwner) flushKeyBuffer()
+    moveCell(e.target, ARROWS[e.key])
+    return
+  }
   //🔥 ПЕРЕХОД В ДРУГУЮ ЯЧЕЙКУ ПРИМЕНЯЕТ НАБРАННОЕ, А НЕ ВЫБРАСЫВАЕТ ЕГО (починено
   //21.09.2026). Раньше буфер здесь просто обнулялся, а таймер оставался жить — то есть
   //набранная «8» пропадала МОЛЧА, стоило нажать клавишу в соседней строке. Для
@@ -732,6 +778,13 @@ async function lessonFormOk() {
     lessonError.value = locale.t('teacherJournal.homeworkEmpty', 'Напишите, что задано: этот текст получат студенты.')
     return false
   }
+  // Тема в журнале колледжа записывается у каждого занятия; без неё занятие уходило в
+  // журнал и ведомость пустой строкой (живой прогон 27.10.2026). Старые занятия без темы
+  // править по-прежнему можно — проверка только при создании.
+  if (creating && !(f.topic || '').trim()) {
+    lessonError.value = locale.t('teacherJournal.topicEmpty', 'Впишите тему занятия: она попадёт в журнал и ведомость.')
+    return false
+  }
   if (issue === 'far' && (f.date || '').trim() !== lessonAtOpen.date) {
     const ok = await confirm({
       title: locale.t('teacherJournal.farDateTitle', 'Проверьте дату'),
@@ -1048,44 +1101,60 @@ async function downloadVedomost(fmt) {
 
 <template>
   <div class="space-y-4">
-    <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-      <select v-model="group" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto">
-        <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
-      </select>
-      <select v-model="subject" :title="subject"
-              class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:min-w-52 sm:max-w-md">
-        <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
-      </select>
+    <div class="flex flex-wrap items-end gap-2 sm:gap-3">
+      <!-- Подписи над списками и прятать их при пустой нагрузке (живой прогон 23.10.2026):
+           два пустых списка без слов не говорили, что в них выбирать, а рядом стояла
+           кнопка микрофона без подписи. -->
+      <template v-if="groups.length && subjects.length">
+      <!-- На телефоне «Группа» и «Предмет» — в один ряд: две строки на всю ширину съедали
+           верх экрана, и до первого студента оставалось меньше половины (27.10.2026). -->
+      <label class="flex min-w-0 basis-[calc(50%-0.25rem)] grow flex-col gap-1 sm:basis-auto sm:grow-0">
+        <span class="text-xs font-medium text-text3">{{ locale.t('teacherJournal.groupLabel', 'Группа') }}</span>
+        <select v-model="group" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto pointer-coarse:h-11">
+          <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
+        </select>
+      </label>
+      <label class="flex min-w-0 basis-[calc(50%-0.25rem)] grow flex-col gap-1 sm:basis-auto sm:grow-0">
+        <span class="text-xs font-medium text-text3">{{ locale.t('teacherJournal.subjectLabel', 'Предмет') }}</span>
+        <select v-model="subject" :title="subject"
+                class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto sm:min-w-52 sm:max-w-md pointer-coarse:h-11">
+          <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
+        </select>
+      </label>
       <!-- Голосом можно ставить оценки и отмечать пропуски. Кнопка здесь, а не у
            «Вектора»: команде нужны группа и предмет, а они выбраны именно на этой
            странице. Тумблер и выбор микрофона — в настройках. -->
-      <MicButton @text="onVoiceText" @error="(m) => toast.error(m)" />
-      <span v-if="saving" class="text-xs font-medium text-accent sm:self-center">{{ locale.t('teacherJournal.saving', 'Сохранение…') }}</span>
-      <span v-else-if="data" class="text-xs text-text3 sm:self-center">
+      <MicButton :label="locale.t('teacherJournal.micLabel', 'Голосом')" @text="onVoiceText" @error="(m) => toast.error(m)" />
+      </template>
+      <!-- Строка статуса — одна строка всегда: «сохранено» раньше переносилось на вторую и
+           сдвигало таблицу под пальцем на ~40 px. Отметка о сохранении идёт первой — она
+           важнее счётчиков, а длинный хвост обрезается многоточием. -->
+      <span v-if="saving" class="block w-full truncate text-xs font-medium text-accent sm:w-auto sm:self-center">{{ locale.t('teacherJournal.saving', 'Сохранение…') }}</span>
+      <span v-else-if="data" class="block w-full truncate text-xs text-text3 sm:w-auto sm:self-center">
+        <span v-if="lastSavedAt" class="font-medium text-accent" role="status">
+          <GbIcon name="save" class="inline-block size-3.5 align-[-2px]" /> {{ locale.t('teacherJournal.savedAt', { time: lastSavedAt }) }} ·
+        </span>
         {{ locale.t('teacherJournal.countsLine', { students: visibleStudents.length, lessons: visibleLessons.length }) }}
         <!-- План часов задаёт админ. Не задан (total=0) — строку не показываем вовсе -->
         <span v-if="data.hours?.total" class="text-accent"
               :title="locale.t('teacherJournal.hoursHint', 'Одно занятие (пара) — 2 академических часа. План часов задаёт администратор.')">
           · {{ locale.t('teacherJournal.hoursProgress', { done: data.hours.done, total: data.hours.total }) }}
         </span>
-        <span v-if="lastSavedAt" class="font-medium text-accent" role="status">
-          · ✓ {{ locale.t('teacherJournal.savedAt', { time: lastSavedAt }) }}
-        </span>
       </span>
       <!-- ⚠️ НА ТЕЛЕФОНЕ 2x2, а не одна строка. Четыре кнопки в ряд делят ~312 px (360
-           минус поля и три промежутка) — по 78 px на «🎓 Аттестация», и последняя не
+           минус поля и три промежутка) — по 78 px на «Аттестацию», и последняя не
            влезала (живой отзыв). Уменьшать текст бессмысленно: он и так короткий, а
            подписи нужны — иконки без слов на редких действиях не читаются. С `sm`
            места хватает, и кнопки возвращаются в одну строку, как были. -->
       <div v-if="group && subject" class="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto">
-        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="!data?.students?.length" @click="openAtt">🎓 {{ locale.t('teacherJournal.attButton', 'Аттестация') }}</AppButton>
+        <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="!data?.students?.length" @click="openAtt"><GbIcon name="attestation" class="size-4 shrink-0" />{{ locale.t('teacherJournal.attButton', 'Аттестация') }}</AppButton>
         <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="!data?.students?.length"
                    :title="locale.t('teacherJournal.vedomostHint', 'Итоговые оценки за семестр — документ для учебной части.')"
-                   @click="openFmt('vedomost')">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
+                   @click="openFmt('vedomost')"><GbIcon name="document" class="size-4 shrink-0" />{{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
         <AppButton variant="ghost" size="sm" class="sm:flex-none" :disabled="exporting || !data?.students?.length"
                    :title="locale.t('teacherJournal.journalHint', 'Все занятия и отметки группы по этому предмету одной таблицей.')"
                    @click="openFmt('journal')">
-          {{ exporting ? locale.t('teacherJournal.exportingButton', 'Выгрузка…') : `📘 ${locale.t('teacherJournal.journalButton', 'Журнал')}` }}
+          <GbIcon v-if="!exporting" name="journal" class="size-4 shrink-0" />{{ exporting ? locale.t('teacherJournal.exportingButton', 'Выгрузка…') : locale.t('teacherJournal.journalButton', 'Выгрузить') }}
         </AppButton>
         <AppButton variant="green" size="sm" class="sm:flex-none" @click="openLesson">+ {{ locale.t('teacherJournal.addLessonButton', 'Занятие') }}</AppButton>
       </div>
@@ -1113,7 +1182,7 @@ async function downloadVedomost(fmt) {
          исчез. Тихая пропажа человека из журнала хуже любой неудобной надписи, поэтому
          говорим о ней прямо и называем, кто это чинит. -->
     <div v-if="unassignedCount" class="flex items-start gap-2 rounded-sm border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-xs text-text2">
-      <span aria-hidden="true">⚠️</span>
+      <GbIcon name="warn" class="size-4 shrink-0" />
       <span>{{ locale.t('teacherJournal.unassignedWarning', { n: unassignedCount }) }}</span>
     </div>
 
@@ -1156,13 +1225,13 @@ async function downloadVedomost(fmt) {
                 <!-- Кнопки — квадраты 28 px с промежутком, а не два значка вплотную: «изменить»
                      и «удалить» стояли в 12 пикселях друг от друга, и промах мимо карандаша
                      открывал окно удаления. -->
-                <div class="mt-1 flex items-center justify-center gap-4 text-text3">
-                  <button type="button" class="grid size-7 place-items-center rounded-sm hover:bg-accent-glow hover:text-accent"
+                <div class="mt-1 flex items-center justify-center gap-4 text-text3 pointer-coarse:gap-1">
+                  <button type="button" class="grid size-8 place-items-center rounded-md hover:bg-accent-glow hover:text-accent pointer-coarse:size-11"
                           :title="locale.t('teacherJournal.edit', 'Изменить')" :aria-label="locale.t('teacherJournal.edit', 'Изменить')"
-                          @click.stop="openEditLesson(col.l)">✎</button>
-                  <button type="button" class="grid size-7 place-items-center rounded-sm hover:bg-red/10 hover:text-red"
+                          @click.stop="openEditLesson(col.l)"><GbIcon name="edit" class="size-3.5" /></button>
+                  <button type="button" class="grid size-8 place-items-center rounded-md hover:bg-red/10 hover:text-red pointer-coarse:size-11"
                           :title="locale.t('teacherJournal.ctxDeleteLesson', 'Удалить занятие')" :aria-label="locale.t('teacherJournal.ctxDeleteLesson', 'Удалить занятие')"
-                          @click.stop="delLesson(col.l)">✕</button>
+                          @click.stop="delLesson(col.l)"><GbIcon name="delete" class="size-3.5" /></button>
                 </div>
               </template>
             </th>
@@ -1184,6 +1253,13 @@ async function downloadVedomost(fmt) {
               <!-- Пунктирная жёлтая рамка = оценка ещё НЕ на сервере (нет сети). Без
                    пометки офлайн-клетка выглядит точно так же, как сохранённая, и
                    преподаватель закрыл бы журнал в уверенности, что всё уехало. -->
+              <button v-else-if="touchPicker" type="button"
+                      :class="[gradeClass(s.grades[col.key], col.l),
+                               isPending(s, col) ? 'border-dashed border-yellow' : 'border-border2',
+                               flashKey === cellKey(s, col.key) ? 'ring-2 ring-accent' : '']"
+                      :aria-label="`${s.surname} ${s.name}: ${rawValue(s.grades[col.key]) || '—'}`"
+                      class="h-11 w-14 rounded-sm border bg-card2 text-center text-base outline-none transition-colors active:border-accent"
+                      @click="openPicker(s, col)">{{ rawValue(s.grades[col.key]) || '·' }}</button>
               <select v-else :value="rawValue(s.grades[col.key])"
                       :class="[gradeClass(s.grades[col.key], col.l),
                                isPending(s, col) ? 'border-dashed border-yellow' : 'border-border2',
@@ -1197,7 +1273,7 @@ async function downloadVedomost(fmt) {
                 <!-- Пустой пункт — это «убрать отметку». Точка без подписи этого не говорила:
                      снять ошибочную оценку было нечем, если не знать заранее. В пустой клетке
                      остаётся точка — там убирать нечего. -->
-                <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || (rawValue(s.grades[col.key]) ? locale.t('teacherJournal.clearMark', '✕ убрать') : '·') }}</option>
+                <option v-for="o in cellOptions(col.l)" :key="o" :value="o">{{ o || (rawValue(s.grades[col.key]) ? locale.t('teacherJournal.clearMark', 'убрать') : '·') }}</option>
               </select>
             </td>
             <td class="border-l-2 border-accent/20 px-4 py-2 text-right font-title text-base font-bold" :class="avgClass(averageOf(s))">
@@ -1213,32 +1289,44 @@ async function downloadVedomost(fmt) {
       </table>
     </StickyXScroll>
 
+    <GradePicker v-if="picker" :options="cellOptions(picker.col.l)"
+                 :current="rawValue(picker.s.grades[picker.col.key])"
+                 :title="`${picker.s.surname} ${picker.s.name}`" :subtitle="pickerSubtitle(picker.col)"
+                 :tone-of="(v) => gradeClass(v, picker.col.l)"
+                 @pick="onPick" @close="picker = null" />
+
     <!-- ЛЕГЕНДА МЕТОК. Заведена в 3.7.6 вместе с переназначением «О» (было «уважительная
          причина», стало «опоздал»). Раньше смысл букв не был написан НИГДЕ в журнале —
          преподаватель выбирал их из списка по догадке, и именно так «О» и разъехалось
          с тем, что считал сервер. Подпись стоит там, где метку ставят. -->
-    <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-tiny text-text3">
+    <!-- text-xs, а не text-tiny: tiny задан в пикселях, и режим слабовидящих легенду
+         не увеличивал (живой прогон 23.10.2026). -->
+    <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text3">
       <span><b class="text-accent">✓</b> {{ locale.t('teacherJournal.legendPresent', 'был на занятии') }}</span>
       <span><b class="text-red">Н</b> {{ locale.t('teacherJournal.legendN', 'неявка — идёт в пропуски') }}</span>
       <span><b>Б</b> {{ locale.t('teacherJournal.legendB', 'болезнь — идёт в пропуски') }}</span>
       <span><b>О</b> {{ locale.t('teacherJournal.legendO', 'опоздал — в пропуски НЕ идёт') }}</span>
+      <span v-if="keyboardInput" class="inline-flex items-center gap-1">
+        <GbIcon name="keyboard" class="size-3.5 shrink-0" />
+        {{ locale.t('teacherJournal.legendKeys', 'стрелки — по клеткам, цифра или буква — отметка, Delete — убрать') }}
+      </span>
     </div>
 
     <!-- Контекстное меню (ПКМ) -->
-    <div v-if="ctx.show" ref="ctxBox"
+    <div v-if="ctx.show" v-back-close="closeCtx" ref="ctxBox"
          class="fixed z-50 min-w-48 overflow-y-auto rounded-lg border border-border2 bg-card py-1 shadow-card transition-opacity"
          :class="ctxPos ? 'opacity-100' : 'opacity-0'"
          :style="{ left: (ctxPos ? ctxPos.left : ctx.x) + 'px', top: (ctxPos ? ctxPos.top : ctx.y) + 'px',
                    maxHeight: menuMaxHeight(typeof window === 'undefined' ? 800 : window.innerHeight) + 'px' }"
          @click.stop>
-      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxEdit">✎ {{ locale.t('teacherJournal.ctxEditTopic', 'Изменить тему / дату') }}</button>
-      <button v-if="ctx.lesson?.type === 'Экзамен'" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxRetake">📅 {{ locale.t('teacherJournal.ctxAssignRetake', 'Назначить пересдачу') }}</button>
+      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxEdit"><GbIcon name="edit" class="size-4 shrink-0" />{{ locale.t('teacherJournal.ctxEditTopic', 'Изменить тему / дату') }}</button>
+      <button v-if="ctx.lesson?.type === 'Экзамен'" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-text hover:bg-bg2" @click="ctxRetake"><GbIcon name="calendar" class="size-4 shrink-0" />{{ locale.t('teacherJournal.ctxAssignRetake', 'Назначить пересдачу') }}</button>
       <div class="my-1 border-t border-border" />
-      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red hover:bg-red/10" @click="ctxDelete">🗑 {{ locale.t('teacherJournal.ctxDeleteLesson', 'Удалить занятие') }}</button>
+      <button class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red hover:bg-red/10" @click="ctxDelete"><GbIcon name="delete" class="size-4 shrink-0" />{{ locale.t('teacherJournal.ctxDeleteLesson', 'Удалить занятие') }}</button>
     </div>
 
     <!-- Модалка занятия: создание и правка (дата — сегодня по умолчанию) -->
-    <div v-dialog v-if="showLesson" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeLesson">
+    <div v-dialog v-if="showLesson" data-dialog-guard="self" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeLesson">
       <div class="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-card">
         <h3 class="mb-4 font-title text-lg font-bold text-text">
           {{ editingLesson ? locale.t('teacherJournal.editLessonTitle', 'Изменить занятие') : locale.t('teacherJournal.newLessonTitle', 'Новое занятие') }} · {{ group }}
@@ -1281,9 +1369,9 @@ async function downloadVedomost(fmt) {
     </div>
 
     <!-- Модалка аттестации: итоговые оценки за семестр + форма контроля + ведомость -->
-    <div v-dialog v-if="showAtt" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeAtt">
+    <div v-dialog v-if="showAtt" data-dialog-guard="self" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeAtt">
       <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-1 font-title text-lg font-bold text-text">🎓 {{ locale.t('teacherJournal.attTitle', 'Итоговые оценки за семестр') }}</h3>
+        <h3 class="mb-1 flex items-center gap-2 font-title text-lg font-bold text-text"><GbIcon name="attestation" class="size-5 shrink-0 text-accent" />{{ locale.t('teacherJournal.attTitle', 'Итоговые оценки за семестр') }}</h3>
         <p class="mb-3 text-xs text-text3">{{ group }} · {{ subject }} · {{ termLabel(currentTerm) }}</p>
         <label class="mb-3 block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('teacherJournal.controlFormLabel', 'Форма контроля') }}</span>
           <select v-model="attForm" class="h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
@@ -1340,7 +1428,7 @@ async function downloadVedomost(fmt) {
         </p>
         <div class="mt-4 flex flex-wrap justify-end gap-2">
           <AppButton variant="ghost" size="sm" @click="closeAtt">{{ locale.t('common.close') }}</AppButton>
-          <AppButton variant="ghost" size="sm" @click="vedomostFromAtt">📄 {{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
+          <AppButton variant="ghost" size="sm" @click="vedomostFromAtt"><GbIcon name="document" class="size-4 shrink-0" />{{ locale.t('teacherJournal.vedomostButton', 'Ведомость') }}</AppButton>
           <AppButton variant="green" size="sm" :disabled="attSaving" @click="saveAtt">{{ attSaving ? locale.t('teacherJournal.saving', 'Сохранение…') : locale.t('common.save') }}</AppButton>
         </div>
       </div>
@@ -1355,8 +1443,8 @@ async function downloadVedomost(fmt) {
           ? locale.t('teacherJournal.journalHint', 'Все занятия и отметки группы по этому предмету одной таблицей.')
           : locale.t('teacherJournal.vedomostHint', 'Итоговые оценки за семестр — документ для учебной части.') }}</p>
         <div class="flex flex-col gap-2">
-          <AppButton variant="ghost" @click="pickFmt('xlsx')">📊 {{ locale.t('teacherJournal.excelOption', 'Excel (.xlsx)') }}</AppButton>
-          <AppButton variant="ghost" @click="pickFmt('docx')">📄 {{ locale.t('teacherJournal.wordOption', 'Word (.docx)') }}</AppButton>
+          <AppButton variant="ghost" @click="pickFmt('xlsx')"><GbIcon name="excel" class="size-4 shrink-0" />{{ locale.t('teacherJournal.excelOption', 'Excel (.xlsx)') }}</AppButton>
+          <AppButton variant="ghost" @click="pickFmt('docx')"><GbIcon name="word" class="size-4 shrink-0" />{{ locale.t('teacherJournal.wordOption', 'Word (.docx)') }}</AppButton>
           <!-- Выход из окна кнопкой: щелчок мимо и Esc знает не каждый. -->
           <AppButton variant="ghost" size="sm" class="mt-1" @click="fmtMenu.show = false">{{ locale.t('common.cancel') }}</AppButton>
         </div>

@@ -27,6 +27,7 @@ const VAR_MAP = {
   red: '--gb-red', orange: '--gb-orange', yellow: '--gb-yellow',
   shadow: '--gb-shadow', overlay: '--gb-overlay',
   green: '--gb-accent', green2: '--gb-accent2', green_glow: '--gb-accent-glow', blue: '--gb-blue',
+  accent_text: '--gb-accent-text',
 }
 
 function loadLocal() {

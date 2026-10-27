@@ -28,12 +28,12 @@ const canSeeJournal = computed(() => ['teacher', 'admin'].includes(useAuthStore(
 //Эмодзи, а не только иконка Lucide: в колесе они различимы боковым зрением, потому что
 //цветные, а монохромная иконка на цветном секторе теряется.
 const KINDS = [
-  { id: 'board', icon: Presentation, emoji: '🖊️' },
-  { id: 'quiz', icon: ListChecks, emoji: '📝' },
-  { id: 'contest', icon: Trophy, emoji: '🏆' },
-  { id: 'poll', icon: BarChart3, emoji: '📊' },
-  { id: 'pulse', icon: Gauge, emoji: '🌡️' },
-  { id: 'timer', icon: Timer, emoji: '⏱️' },
+  { id: 'board', icon: Presentation },
+  { id: 'quiz', icon: ListChecks },
+  { id: 'contest', icon: Trophy },
+  { id: 'poll', icon: BarChart3 },
+  { id: 'pulse', icon: Gauge },
+  { id: 'timer', icon: Timer },
 ]
 
 const chosen = ref('')                 // '' — сетка категорий, иначе экран параметров
@@ -157,7 +157,7 @@ async function confirm() {
        ⚠️ Оверлей прозрачный, но КЛИКАБЕЛЬНЫЙ (без `pointer-events: none`): сквозные
        клики попадали бы по журналу и кнопкам под колесом — человек, промахнувшись мимо
        сектора, запускал бы что-то на странице позади. Клик мимо закрывает, Esc тоже. -->
-  <div v-if="!chosen" class="fixed inset-0 z-[70] flex items-center justify-center p-3"
+  <div v-back-close v-if="!chosen" class="fixed inset-0 z-[70] flex items-center justify-center p-3"
        @click.self="emit('close')">
     <!-- Почему колесо и как оно устроено — в докстринге ActivityWheel.vue. Ссылка на
          журнал живёт во ВТУЛКЕ: журнал относится ко всем шести активностям сразу. -->
@@ -167,11 +167,11 @@ async function confirm() {
 
   <!-- ЭКРАН ПАРАМЕТРОВ: обычная модалка — здесь поля ввода, и им нужны и подложка, и
        шапка с «назад». -->
-  <div v-else class="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3"
+  <div v-back-close v-else class="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3"
        @click.self="emit('close')">
     <div class="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border2 bg-card shadow-xl">
       <div class="flex items-center gap-2 border-b border-border2 px-4 py-3">
-        <button :aria-label="locale.t('common.back', 'Назад')" type="button" @click="chosen = ''"
+        <button v-back-close :aria-label="locale.t('common.back', 'Назад')" type="button" @click="chosen = ''"
                 class="rounded-lg p-1 text-text3 hover:text-accent">
           <ChevronLeft class="size-5" />
         </button>

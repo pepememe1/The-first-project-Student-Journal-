@@ -464,60 +464,20 @@ def prepare_env() -> None:
 def _ensure_copy_openable(login: str, encrypted: bool) -> None:
     """Убрать в сторону локальную копию, которую НЕЧЕМ открыть, — и дать создать новую.
 
-    Копия базы — ПРОИЗВОДНЫЕ данные: истина живёт на сервере, а сюда она зеркалится
-    (`local_mirror`). Поэтому нечитаемый файл это не потеря, а мусор, и единственно
-    правильное поведение — начать копию заново. Без этой проверки сервер падал на старте
-    («file is not a database»), а вместе с ним не открывалась ВСЯ программа: ровно так и
-    случилось на машине, где копию однажды зашифровали, а потом запустили из окружения
-    без `sqlcipher3`.
-
-    ⚠️ ПЕРЕИМЕНОВЫВАЕМ, а не удаляем. Файл может оказаться единственным местом, где ещё
-    лежат офлайн-правки, не уехавшие на сервер; вернуть их из «.unreadable» можно, из
-    небытия — нет. Заодно уносим -wal/-shm: оставшись рядом, они испортят новый файл."""
-    path = local_db_file(login)
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
-        return
-    if _copy_opens(path, encrypted):
-        return
-    #⚠️ ВСЁ ИЛИ НИЧЕГО. Если хоть один файл занят другим процессом, отступаем целиком:
-    #унести основной файл и оставить его -wal рядом значит собрать «разорванную» копию,
-    #которую следующий запуск тоже не откроет. А занятый файл вдобавок означает, что базу
-    #прямо сейчас держит другой экземпляр программы — тогда наш вердикт «нечитаема»
-    #и вовсе ненадёжен, и правильнее ничего не трогать.
-    import college_clock
-    stamp = college_clock.stamp("%Y%m%d_%H%M%S")
-    present = [path + s for s in ("", "-wal", "-shm") if os.path.exists(path + s)]
-    for src in present:
-        try:
-            with open(src, "ab"):
-                pass                    #проверка «файл не занят», не изменяя содержимое
-        except OSError as e:
-            _LOG.warning(f"[local-api] копию держит другой процесс — не трогаем её ({e})")
-            return
-    moved = []
-    for src in present:
-        try:
-            os.replace(src, f"{src}.unreadable-{stamp}")
-            moved.append(os.path.basename(src))
-        except OSError as e:
-            #Успели унести часть — возвращаем обратно, чтобы не оставить половину.
-            for done in moved:
-                try:
-                    os.replace(os.path.join(os.path.dirname(path),
-                                            f"{done}.unreadable-{stamp}"),
-                               os.path.join(os.path.dirname(path), done))
-                except OSError:
-                    pass
-            _LOG.warning(f"[local-api] не удалось убрать нечитаемую копию {src}: {e}")
-            return
-    _LOG.warning("[local-api] локальная копия нечитаема — начинаем заново "
-                 f"(старая сохранена как *.unreadable-{stamp}): {', '.join(moved)}")
+    Копия базы — производные данные: истина на сервере, сюда она зеркалится
+    (`local_mirror`). Без этой проверки сервер падал на старте («file is not a
+    database»), а с ним не открывалась вся программа — так было на машине, где копию
+    зашифровали, а потом запустили без `sqlcipher3`. Правило одно со служебной базой
+    (`local_db.set_aside_unreadable`): ключ — тот, которым копию откроет серверный пакет."""
+    from data import local_db
+    key = os.environ.get("GRADEBOOK_DB_KEY", "") if encrypted else ""
+    local_db.set_aside_unreadable(local_db_file(login), key, plain_migrates=False)
 
 
 def _copy_unsent_count(path: str) -> int:
     """Сколько правок из очереди досылки лежит в копии (0 — нет, пусто или не открылась).
 
-    Открываем тем же способом, что `_copy_opens`: копии всех пользователей машины
+    Открываем тем же способом, что `local_db.opens`: копии всех пользователей машины
     зашифрованы ОДНИМ ключом устройства. Не открылась — считать нечего: такой файл и
     сервер не откроет, а «не знаю» здесь не повод держать мусор с ПДн вечно."""
     if path.endswith(("-wal", "-shm")):
@@ -547,33 +507,6 @@ def _copy_unsent_count(path: str) -> int:
     except Exception as e:      # noqa: BLE001
         _LOG.info(f"[local-api] очередь в копии {os.path.basename(path)} не прочиталась: {e}")
         return 0
-
-
-def _copy_opens(path: str, encrypted: bool) -> bool:
-    """Открывается ли файл тем же способом, каким его откроет серверный пакет."""
-    key = os.environ.get("GRADEBOOK_DB_KEY", "") if encrypted else ""
-    try:
-        if key:
-            try:
-                import sqlcipher3 as _sq
-            except Exception:
-                import sqlite3 as _sq          #драйвера нет — откроется как обычный SQLite
-        else:
-            import sqlite3 as _sq
-        con = _sq.connect(path)
-        try:
-            cur = con.cursor()
-            if key:
-                #Тот же формат ключа, что в server/app/db.py.
-                cur.execute(f"PRAGMA key=\"x'{key}'\"")
-            cur.execute("PRAGMA schema_version")   #дешёвое чтение заголовка
-            cur.fetchone()
-            return True
-        finally:
-            con.close()
-    except Exception as e:
-        _LOG.info(f"[local-api] копия не открывается ({e})")
-        return False
 
 
 #Сколько снимков личной копии держим на пользователя. Снимок снимается на КАЖДОМ

@@ -24,7 +24,7 @@ onBeforeUnmount(() => timers.forEach(clearTimeout))
        кликнуть можно только по ней: промах по интерфейсу под ней уносил находку —
        страница уходила, а вместе с ней и пасхалка. Тот же приём, что у окна про
        cookie: выйти мимо кнопок нельзя. -->
-  <div class="fixed inset-0 z-[92] bg-black transition-opacity duration-700"
+  <div v-back-close="() => emit('close')" class="fixed inset-0 z-[92] bg-black transition-opacity duration-700"
        :style="{ opacity: on ? 1 : 0 }">
     <img src="/easter/img/skyrim-cart.webp" alt=""
          class="h-full w-full object-cover" />

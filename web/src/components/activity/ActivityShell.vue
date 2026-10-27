@@ -106,7 +106,7 @@ async function close() {
        сворачивал окно, разворачивал и обнаруживал тест с самого начала. Живой отзыв
        Влада «свернул — тест начался заново». Цена v-show — доска и плееры висят в
        памяти свёрнутыми, что и требуется: свёрнутое окно показывает их предпросмотр. -->
-  <div v-show="act.activity && act.mode === 'full'"
+  <div v-back-close="() => act.minimize()" v-show="act.activity && act.mode === 'full'"
        class="fixed inset-0 z-[60] flex flex-col bg-bg">
     <div class="flex shrink-0 items-center gap-2 border-b border-border2 bg-card px-4 py-3">
       <h2 class="min-w-0 flex-1 truncate text-base font-semibold text-text">{{ title }}</h2>
@@ -150,7 +150,7 @@ async function close() {
        трансляция в Discord. Без него свёрнутая активность неотличима от закрытой:
        человек не видит, идёт ли она и что там происходит, и разворачивает наугад. -->
   <button v-if="act.activity && act.mode === 'mini'" type="button" @click="act.expand()"
-          class="fixed bottom-4 right-4 z-[60] w-56 max-w-[80vw] overflow-hidden rounded-2xl border border-border2 bg-card text-left shadow-lg hover:border-accent">
+          class="fixed bottom-[calc(1rem+var(--gb-bottom-chrome))] right-4 z-[60] w-56 max-w-[80vw] overflow-hidden rounded-2xl border border-border2 bg-card text-left shadow-lg hover:border-accent">
     <!-- Доска — уменьшенная копия штрихов. Они хранятся долями 0..1, поэтому
          масштабируются в любой viewBox без пересчёта координат. -->
     <div v-if="act.kind === 'board'" class="relative h-24 w-full bg-bg2">

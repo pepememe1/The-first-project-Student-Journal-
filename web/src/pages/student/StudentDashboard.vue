@@ -13,6 +13,7 @@ import InsightCards from '@/components/InsightCards.vue'
 import ParentConsent from '@/components/ParentConsent.vue'
 import { dashboardEmote } from '@/config/mascot'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
 
@@ -130,7 +131,7 @@ onBeforeUnmount(() => clearInterval(tipTimer))
          @mouseenter="tipsPaused = true" @mouseleave="tipsPaused = false"
          @focusin="tipsPaused = true" @focusout="tipsPaused = false">
       <div class="mb-1 flex items-center justify-between">
-        <p class="text-sm font-bold text-accent">💡 {{ locale.t('studentDashboard.smartTip', 'Умный совет') }}</p>
+        <p class="flex items-center gap-1.5 text-sm font-bold text-accent"><GbIcon name="tip" class="size-4 shrink-0" />{{ locale.t('studentDashboard.smartTip', 'Умный совет') }}</p>
         <!-- 44 px — общепринятая цель для пальца; было 28×28 (UX-аудит 17.10.2026).
              Сама иконка прежнего размера, растёт только область нажатия. -->
         <button class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-md border border-accent/25 text-accent hover:bg-accent-glow"

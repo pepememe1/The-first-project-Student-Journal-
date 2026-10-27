@@ -95,7 +95,8 @@ test('проводка: причина названа на форме входа
   const clear = app.indexOf('auth.clearSession()')
   assert.ok(remember > 0, 'конец сессии больше не запоминает, где был человек')
   assert.ok(remember < clear, 'адрес запоминается ПОСЛЕ очистки — логина уже нет, отличить людей нечем')
-  assert.match(app, /auth\.setNotice\(reason\)/)
+  //Причину называют тому, кто был в системе (logoutNotice.test.mjs, 23.10.2026).
+  assert.match(app, /auth\.setNotice\(hadUser \? reason : ''\)/)
   assert.match(app, /setAuthExpiredHandler\(\(\) => toLogin\('expired'\)\)/)
   assert.match(app, /setOfflineExpiredHandler\(\(\) => toLogin\('offline'\)\)/)
 

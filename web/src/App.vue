@@ -29,9 +29,13 @@ const toast = useToast()
  */
 function toLogin(reason = 'expired') {
   const at = router.currentRoute.value
+  //Объяснять «почему вы на форме входа» есть смысл тому, кто был в системе. Без входа
+  //401 получает любой запрос (регистрация пуш-токена на старте после выхода), и плашка
+  //«время работы вышло» стояла у человека, который вышел сам (23.10.2026).
+  const hadUser = !!auth.user
   if (!at.meta?.public) rememberResume(auth.user?.login, at.fullPath)
   auth.clearSession()
-  auth.setNotice(reason)
+  auth.setNotice(hadUser ? reason : '')
   if (at.path !== '/login') router.push('/login')
 }
 

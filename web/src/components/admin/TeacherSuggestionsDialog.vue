@@ -17,7 +17,7 @@
 // «портал молчит» — в конце и свёрнуты. Список на сотню строк, где нужное перемешано с
 // ненужным, читают один раз, а потом перестают.
 import { ref, computed, onMounted } from 'vue'
-import { X, Check, AlertTriangle, HelpCircle, Users, Minus } from '@lucide/vue'
+import { X, Check, TriangleAlert, CircleHelp, Users, Minus } from '@lucide/vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { useToast } from '@/composables/useToast'
@@ -41,8 +41,8 @@ const ACTIONABLE = ['assign', 'conflict', 'ambiguous', 'unknown']
 const STATE_META = {
   assign: { icon: Check, cls: 'text-green', key: 'assign' },
   conflict: { icon: Users, cls: 'text-orange', key: 'conflict' },
-  ambiguous: { icon: HelpCircle, cls: 'text-orange', key: 'ambiguous' },
-  unknown: { icon: AlertTriangle, cls: 'text-red', key: 'unknown' },
+  ambiguous: { icon: CircleHelp, cls: 'text-orange', key: 'ambiguous' },
+  unknown: { icon: TriangleAlert, cls: 'text-red', key: 'unknown' },
   no_portal: { icon: Minus, cls: 'text-text3', key: 'noPortal' },
   ok: { icon: Check, cls: 'text-text3', key: 'ok' },
 }

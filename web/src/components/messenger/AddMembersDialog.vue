@@ -20,6 +20,7 @@ import { messengerApi, curatorApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
 import Avatar from '@/components/ui/Avatar.vue'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const props = defineProps({
   // Кто уже в беседе — их не предлагаем.
@@ -141,7 +142,7 @@ function submit() {
                 class="flex items-center gap-1 rounded-md bg-accent-glow px-2 py-0.5 text-xs text-accent">
             {{ p.full_name }}
             <button type="button" class="hover:text-red" @click="toggle({ id: p.id })"
-                    :aria-label="locale.t('common.remove', 'Убрать')">✕</button>
+                    :aria-label="locale.t('common.remove', 'Убрать')"><GbIcon name="remove" class="size-3.5" /></button>
           </span>
         </div>
 

@@ -45,6 +45,19 @@
   font-display: swap;
 }
 
+/* Цветные эмодзи Twemoji: одинаковые на Windows, Android и в браузере вместо системных
+   (решение 27.10.2026). Файл свой: внутри программы сети может не быть, а CSP чужие
+   адреса не пускает. unicode-range — только блоки эмодзи, поэтому шрифт качается, когда
+   эмодзи есть на экране, и не перехватывает цифры, стрелки «→» и «©». Источник и
+   лицензия — web/public/fonts/Twemoji-LICENSE.txt. */
+@font-face {
+  font-family: 'GB Emoji';
+  src: url('/fonts/Twemoji.woff2') format('woff2');
+  font-display: swap;
+  unicode-range: U+1F000-1FAFF, U+2600-27BF, U+2B1B-2B1C, U+2B50, U+2B55, U+2934-2935,
+    U+3030, U+303D, U+3297, U+3299, U+200D, U+20E3, U+FE0F, U+E0020-E007F;
+}
+
 /*
   ШРИФТЫ СТИЛЯ НИКНЕЙМА (§5.4, «стиль никнейма» — Discord-style профиль, 3.6).
 
@@ -237,7 +250,7 @@
   страница, где подзаголовок реально рендерится (сейчас — только VectorPage.vue).
 
   Из чего складывается БАЗА (`--gb-page-offset`, без подзаголовка):
-    • на телефоне — мобильная полоса 48 px (`HeaderBar`, только lg:hidden) + отступы
+    • на телефоне — мобильная полоса 3rem (`HeaderBar`, только lg:hidden) + отступы
       контента (p-3 → 12+12) ≈ 4.6rem;
     • с lg полосы нет вовсе (её роль играет сайдбар), остаются отступы sm:py-3.5
       (14+14) ≈ 2rem.
@@ -250,7 +263,7 @@
   окно по высоте не влазит, появляется скролл»).
 
   В приложении RuStore страница рисуется во ВЕСЬ экран, под системными панелями, и две
-  вставки занимают реальные пиксели: `HeaderBar.vue` берёт себе `48px +
+  вставки занимают реальные пиксели: `HeaderBar.vue` берёт себе `3rem +
   env(safe-area-inset-top)` (шторка уведомлений), `main` в `AppShell.vue` —
   `padding-bottom: env(safe-area-inset-bottom)` (полоса жестов). Формула высоты про них
   не знала и считала только «наши» пиксели, поэтому полноэкранная страница выходила
@@ -262,19 +275,29 @@
   С `lg` мобильной полосы нет вовсе (её роль играет сайдбар), поэтому верхнюю вставку
   там не вычитаем: её никто не занимает.
 */
+/*
+  НИЖНЯЯ ПАНЕЛЬ ТЕЛЕФОНА (23.10.2026, §4.51). Всё, что занято у нижнего края, — одна
+  переменная `--gb-bottom-chrome`: без панели это безопасная зона (полоса жестов), с
+  панелью — её настоящая высота вместе с зоной; её ставит сама панель (`BottomNav.vue`),
+  потому что высота растёт с режимом слабовидящих. Из неё считают высоту полноэкранные
+  страницы и подъём всплывающих уведомлений, чтобы те не легли на вкладки.
+*/
 :root {
   --gb-safe-top: env(safe-area-inset-top, 0px);
   --gb-safe-bottom: env(safe-area-inset-bottom, 0px);
-  --gb-page-offset: calc(4.575rem + var(--gb-safe-top) + var(--gb-safe-bottom));
+  --gb-bottom-chrome: var(--gb-safe-bottom);
+  --gb-page-offset: calc(4.575rem + var(--gb-safe-top) + var(--gb-bottom-chrome));
   /*
     ХРОМ БЕЗ ОТСТУПОВ СОДЕРЖИМОГО — для страниц, которые на телефоне разворачиваются
     во всю ширину (`gb-fullbleed` ниже) и сами съедают `p-3` контейнера контента.
     Отдельная переменная, а не «page-offset минус что-то на месте»: вычитание руками в
     странице — это ровно тот «свой набор чисел», который уже устаревал молча.
   */
-  --gb-chrome-offset: calc(3rem + var(--gb-safe-top) + var(--gb-safe-bottom));
+  --gb-chrome-offset: calc(3rem + var(--gb-safe-top) + var(--gb-bottom-chrome));
 }
-@media (min-width: 1024px) {
+/* Граница — `lg` оболочки (940 px), а не прежние 1024: между ними мобильной полосы уже
+   нет, а формула её ещё вычитала, и снизу полноэкранных страниц оставалась пустая полоса. */
+@media (min-width: 940px) {
   :root {
     --gb-page-offset: calc(1.975rem + var(--gb-safe-bottom));
     --gb-chrome-offset: var(--gb-safe-bottom);
@@ -337,8 +360,8 @@
   --breakpoint-lg: 940px;
 
   /* Фирменные шрифты Synapse: Syne — заголовки, DM Sans — текст (fallback — системные). */
-  --font-body: 'DM Sans', 'Segoe UI', 'PT Sans', Arial, sans-serif;
-  --font-title: 'Syne', 'Segoe UI Semibold', 'Segoe UI', 'PT Sans', sans-serif;
+  --font-body: 'DM Sans', 'GB Emoji', 'Segoe UI', 'PT Sans', Arial, sans-serif;
+  --font-title: 'Syne', 'GB Emoji', 'Segoe UI Semibold', 'Segoe UI', 'PT Sans', sans-serif;
 
   /* Типографическая шкала (px) — как FS_* в styles.py. */
   --text-tiny: 11px;
@@ -387,16 +410,17 @@
   --gb-border2: #d3dbe1;
   --gb-text: #0f1b22;
   --gb-text3: #46555f;
-  --gb-text2: #7a8893;
-  --gb-red: #d14343;
-  --gb-orange: #d9892b;
-  --gb-yellow: #c99a0c;
+  --gb-text2: #636e77;
+  --gb-red: #c03e3e;
+  --gb-orange: #98601e;
+  --gb-yellow: #876708;
   --gb-shadow: rgba(15, 27, 34, 0.1);
   --gb-overlay: rgba(15, 27, 34, 0.4);
   --gb-accent: #147c8b;
   --gb-accent2: #0e6271;
   --gb-accent-glow: rgba(20, 124, 139, 0.14);
   --gb-blue: #2ba6b8;
+  --gb-accent-text: #137785;
 
   /* Режим слабовидящих (stores/a11y.js): множитель rem. 1 = обычный вид. Меняется
      на лету через inline-style на <html>, поэтому объявлен и здесь дефолтом. */
@@ -667,6 +691,15 @@ html.gb-contrast :focus-visible {
 /* Ссылки-акценты подчёркиваем: в высоком контрасте цвет один читать труднее. */
 html.gb-contrast a { text-decoration-thickness: from-font; }
 
+/* Выбранное — сплошной заливкой. Подложка акцента в 14 % на тёмном фоне читалась ТУСКЛЕЕ
+   соседнего невыбранного текста, который этот режим поднимает до полной яркости: активный
+   пункт меню и выбранные кнопки выглядели отключёнными (живой прогон 23.10.2026). Белый на
+   акценте — как у основных кнопок (`bg-accent text-white`). Только у кнопок и ссылок: тем же
+   классом подсвечены баннеры, значки и чипы, и залитый баннер прятал свою зелёную кнопку. */
+html.gb-contrast :is(a, button).bg-accent-glow { background-color: var(--gb-accent) !important; }
+html.gb-contrast :is(a, button).bg-accent-glow,
+html.gb-contrast :is(a, button).bg-accent-glow * { color: #fff !important; }
+
 /* ── Чёрно-белый глитч на цифре 404 (пасхалка Stanley Parable) ──────────────────
    Отличительный знак: у RDR2 своя карточка, а рассказчик приходит без картинки, и
    отличить одну шутку от другой было нечем. Глитч монохромный НАМЕРЕННО — у Cyberpunk
@@ -755,4 +788,45 @@ html.gb-contrast a { text-decoration-thickness: from-font; }
     outline-width: 3px !important;
     outline-offset: 2px;
   }
+  :is(a, button).bg-accent-glow { background-color: var(--gb-accent) !important; }
+  :is(a, button).bg-accent-glow,
+  :is(a, button).bg-accent-glow * { color: #fff !important; }
+}
+
+/* Акцент в ТЕКСТЕ — свой цвет с контрастом 4.5 (theme/palette.js::readableAccent), заливки
+   остаются чистым акцентом (аудит 27.10.2026: бирюза текстом в тёмной теме — 3.3). Слой
+   utilities, а не правило вне слоёв: здесь оно позже утилиты Tailwind той же силы и
+   перебивает её, но уступает состояниям вроде `hover:text-white` у кнопки с контуром. */
+@layer utilities {
+  .text-accent,
+  .hover\:text-accent:hover,
+  .group:hover .group-hover\:text-accent,
+  .focus-visible\:text-accent:focus-visible {
+    color: var(--gb-accent-text, var(--gb-accent));
+  }
+}
+
+/* На сенсорном экране поле ввода не мельче 16 px: с мелким шрифтом мобильный браузер сам
+   приближает страницу к полю при фокусе. Раньше это лечили запретом масштаба во всём
+   сайте (index.html), что закрывало увеличение слабовидящим (аудит 27.10.2026). Вне слоёв —
+   намеренно: на полях стоят `text-sm`/`text-xs`, и утилиту надо перебить. */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select {
+    font-size: max(16px, 1rem);
+  }
+}
+
+/* Таблицы справочников: при прокрутке вбок первая колонка (кто это) и последняя (кнопки)
+   остаются на месте. На телефоне ФИО уходило за край, и в строке оставались «— / — / ✎ ✕» —
+   не понять, кого правишь или удаляешь (живой прогон 27.10.2026). */
+@layer components {
+  .gb-table-pin :is(th, td):first-child,
+  .gb-table-pin :is(th, td):last-child {
+    position: sticky;
+    z-index: 1;
+    background: var(--gb-card);
+  }
+  .gb-table-pin :is(th, td):first-child { left: 0; }
+  .gb-table-pin :is(th, td):last-child { right: 0; }
+  .gb-table-pin thead :is(th, td) { background: inherit; }
 }

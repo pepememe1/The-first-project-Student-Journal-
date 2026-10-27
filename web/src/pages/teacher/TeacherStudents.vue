@@ -5,7 +5,9 @@ import { teacherApi } from '@/api/endpoints'
 import DataTable from '@/components/ui/DataTable.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import RiskBadge from '@/components/ui/RiskBadge.vue'
+import TabExplainer from '@/components/ui/TabExplainer.vue'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
 
@@ -50,9 +52,14 @@ const atRisk = computed(() => rows.value.filter((r) => r.risk).length)
         <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
       </select>
       <span v-if="atRisk" class="rounded-md border border-red/30 bg-red/10 px-2.5 py-1 text-xs font-semibold text-red">
-        🎓 {{ locale.t('teacherStudents.atRisk', { n: atRisk }) }}
+        <GbIcon name="risk" class="inline-block size-4 align-[-3px]" /> {{ locale.t('teacherStudents.atRisk', { n: atRisk }) }}
       </span>
     </div>
+    <!-- Пояснение — только когда плашки риска есть: иначе это текст ни о чём. -->
+    <TabExplainer v-if="atRisk"
+                  :lead="locale.t('teacherStudents.riskLead', 'Плашка с академической шапочкой — риск отчисления по фактам журнала. Нажмите на неё, чтобы увидеть причины.')"
+                  :more="locale.t('curatorView.riskMore')"
+                  :more-label="locale.t('curatorView.howCounted', 'Как это считается')" />
     <EmptyState v-if="!groups.length" :title="locale.t('teacherStudents.noGroupsTitle', 'Нет групп')" :message="locale.t('teacherStudents.noGroupsMessage', 'За вами не закреплены группы.')" />
     <DataTable v-else :columns="columns" :rows="rows" :loading="loading" :empty="locale.t('teacherStudents.noStudents', 'Студентов нет')">
       <template #cell-surname="{ row }"><span class="font-medium text-text">{{ row.surname }}</span></template>

@@ -6,6 +6,7 @@ import { X, Search, Check } from '@lucide/vue'
 import { messengerApi, curatorApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const props = defineProps({
   kind: { type: String, default: 'group' },   // group | channel
@@ -119,7 +120,7 @@ function submit() {
         <div v-if="chosen.length" class="mb-2 flex flex-wrap gap-1">
           <span v-for="p in chosen" :key="p.id" class="inline-flex items-center gap-1 rounded-full bg-accent-glow px-2 py-0.5 text-xs text-accent">
             {{ p.full_name }}
-            <button :aria-label="locale.t('common.remove', 'Убрать')" type="button" @click="toggle({ id: p.id })" class="hover:text-red">✕</button>
+            <button :aria-label="locale.t('common.remove', 'Убрать')" type="button" @click="toggle({ id: p.id })" class="hover:text-red"><GbIcon name="remove" class="size-3.5" /></button>
           </span>
         </div>
         <div class="mb-2 flex gap-1">
@@ -136,7 +137,7 @@ function submit() {
                   class="flex w-full items-center justify-between gap-2 border-b border-border/50 px-3 py-2 text-left text-sm hover:bg-bg2">
             <span class="min-w-0 truncate text-text">
               {{ u.full_name }}
-              <span v-if="u.role === 'parent' && u.groups?.length" class="text-text3"> · {{ locale.t('messenger.parentOf', 'род. ') }}{{ u.groups.join(', ') }}</span>
+              <span v-if="u.groups?.length" class="text-text3"> · {{ u.role === 'parent' ? locale.t('messenger.parentOf', 'род. ') : '' }}{{ u.groups.join(', ') }}</span>
             </span>
             <span class="grid size-5 shrink-0 place-items-center rounded-full border"
                   :class="isChosen(u.id) ? 'border-accent bg-accent text-white' : 'border-border2'">

@@ -23,6 +23,7 @@ import { copyText } from '@/utils/clipboard'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const props = defineProps({
   login: { type: String, default: '' },
@@ -136,7 +137,7 @@ async function reset() {
         <div class="flex h-10 min-w-0 items-center truncate rounded-sm border px-3 text-sm"
              :class="stateCls(contacts?.email_state)">
           <span class="truncate text-text2">{{ contacts?.self_email || '—' }}</span>
-          <span v-if="contacts?.self_email_verified" class="ml-1 shrink-0 text-tiny text-accent">✓</span>
+          <GbIcon v-if="contacts?.self_email_verified" name="verified" class="ml-1 size-3.5 shrink-0 text-accent" />
         </div>
         <input v-model="adminPhone" inputmode="tel" :placeholder="loc.t('account.phone', 'Телефон')"
                class="h-10 min-w-0 rounded-sm border px-3 text-sm text-text outline-none focus:border-accent"

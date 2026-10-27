@@ -23,6 +23,9 @@ import Avatar from '@/components/ui/Avatar.vue'
 import AccessibilityMenu from '@/components/AccessibilityMenu.vue'
 
 const emit = defineEmits(['toggle-sidebar'])
+// С нижней панелью (BottomNav.vue) «Меню» живёт там, у большого пальца; кнопка здесь
+// остаётся только для режима без панели.
+defineProps({ menuButton: { type: Boolean, default: true } })
 const auth = useAuthStore()
 const profile = useProfileStore()
 const locale = useLocaleStore()
@@ -39,28 +42,33 @@ const fullName = computed(() => (auth.user?.name || '').trim())
 </script>
 
 <template>
+  <!-- Высота в rem, а не 48 px: кнопки растут вместе с режимом слабовидящих, и на «Максимуме»
+       очки торчали за нижний край полосы (23.10.2026). `--gb-page-offset` в style.css и так
+       считает полосу как 3rem. -->
   <header
     class="flex shrink-0 items-center gap-2 border-b border-border bg-bg2 px-2 lg:hidden"
-    style="height: calc(48px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top);"
+    style="height: calc(3rem + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top);"
   >
     <!-- На телефоне весь список разделов живёт за этой дверью. Один «гамбургер» хорошо
          узнают разработчики, но для нового преподавателя или родителя он не объясняет,
          где искать журнал, расписание и настройки. Короткая подпись делает действие
          явным и не отнимает отдельную строку у контента. -->
-    <button
-      class="flex h-9 shrink-0 items-center gap-1 rounded-md px-1.5 text-text2 hover:bg-bg hover:text-accent"
+    <button v-if="menuButton"
+      class="flex h-9 shrink-0 items-center gap-1 rounded-md px-1.5 text-text2 hover:bg-bg hover:text-accent pointer-coarse:h-11 pointer-coarse:px-2.5"
       :aria-label="locale.t('header.menu', 'Меню')" @click="emit('toggle-sidebar')"
     >
       <Menu class="size-5" />
       <span class="text-xs font-semibold">{{ locale.t('header.menu', 'Меню') }}</span>
     </button>
 
-    <p class="min-w-0 flex-1 truncate font-title text-sm font-bold text-text">{{ title }}</p>
+    <!-- Две строки, а не обрезка: при крупном шрифте «Журнал преподавателя» резалось в
+         «Журнал препо…» (живой прогон 23.10.2026). Шапка в 48 px вмещает обе. -->
+    <p class="min-w-0 flex-1 overflow-hidden font-title text-sm font-bold leading-tight text-text hyphens-auto [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">{{ title }}</p>
 
     <!-- Версия для слабовидящих — на телефоне полоса всегда видна, здесь ей и место. -->
     <AccessibilityMenu placement="down" class="shrink-0" />
 
-    <RouterLink :to="`/${auth.role}/settings`" class="shrink-0"
+    <RouterLink :to="`/${auth.role}/settings`" class="grid shrink-0 place-items-center pointer-coarse:size-11"
                 :aria-label="locale.t('nav.profile', 'Профиль')">
       <Avatar :src="profile.avatar" :name="fullName" :role="auth.role" :color="profilePlate(profile.color)" :size="30" />
     </RouterLink>

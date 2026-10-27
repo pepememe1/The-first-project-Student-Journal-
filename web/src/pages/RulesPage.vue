@@ -21,7 +21,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useLocaleStore } from '@/stores/locale'
-import { ShieldCheck, ArrowLeft } from '@lucide/vue'
+import { ShieldCheck, ChevronLeft } from '@lucide/vue'
 
 const locale = useLocaleStore()
 const route = useRoute()
@@ -118,7 +118,7 @@ const ENFORCEMENT = [
   <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6">
     <RouterLink v-if="backTo" :to="backTo"
                 class="mb-6 inline-flex items-center gap-2 text-sm text-text3 hover:text-text">
-      <ArrowLeft class="size-4" />{{ locale.t('rules.back', 'Назад') }}
+      <ChevronLeft class="size-4" />{{ locale.t('rules.back', 'Назад') }}
     </RouterLink>
 
     <header class="mb-8 flex items-start gap-3">

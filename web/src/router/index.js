@@ -176,7 +176,7 @@ export const routes = [
       page('stats', StudentStats, 'Моя статистика', 'router.myStats'),
       page('courses', CoursesPage, 'Курсы', 'nav.courses'),
       { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
+      { path: 'vector', component: VectorPage, meta: { title: 'Помощник Вектор', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к
@@ -201,7 +201,7 @@ export const routes = [
       page('stats', TeacherStats, 'Статистика группы', 'router.groupStats'),
       page('courses', CoursesPage, 'Курсы', 'nav.courses'),
       { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
+      { path: 'vector', component: VectorPage, meta: { title: 'Помощник Вектор', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к
@@ -255,7 +255,7 @@ export const routes = [
       profileToSettings,
       page('settings', Settings, 'Настройки', 'nav.settings'),
       { path: 'monitor', component: MonitorPage, meta: { title: 'Мониторинг', i18nTitle: 'nav.monitor', } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
+      { path: 'vector', component: VectorPage, meta: { title: 'Помощник Вектор', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к
@@ -296,7 +296,7 @@ export const routes = [
       { path: '', component: ParentJournal, meta: { title: 'Журнал', i18nTitle: 'nav.teacherJournal', } },
       page('courses', CoursesPage, 'Курсы', 'nav.courses'),
       { path: 'courses/:id', component: CourseDetailPage, meta: { title: 'Курс', i18nTitle: 'nav.courses' } },
-      { path: 'vector', component: VectorPage, meta: { title: 'ИИ Помощник', i18nTitle: 'nav.ai', } },
+      { path: 'vector', component: VectorPage, meta: { title: 'Помощник Вектор', i18nTitle: 'nav.ai', } },
       { path: 'messages', component: MessengerPage, meta: { title: 'Сообщения', i18nTitle: 'nav.messages' } },
       { path: 'notifications', component: NotificationsPage, meta: { title: 'Уведомления', i18nTitle: 'nav.notifications' } },
       //Одно письмо — своей страницей и своим адресом (05.10.2026): «назад» возвращает к

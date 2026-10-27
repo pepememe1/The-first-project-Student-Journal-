@@ -28,6 +28,7 @@ import { dropResume } from '@/utils/sessionResume'
 import { useMessengerStore } from '@/stores/messenger'
 import { useVectorStore } from '@/stores/vector'
 import { useProfileStore } from '@/stores/profile'
+import { useNavBadgesStore } from '@/stores/navBadges'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useActivityStore } from '@/stores/activity'
 import { useTrackerStore } from '@/stores/tracker'
@@ -276,9 +277,6 @@ export const useAuthStore = defineStore('auth', () => {
     // Отписываем устройство ДО гашения токена: после clearTokens запрос уже не пройдёт,
     // и бывший владелец телефона продолжал бы получать чужие уведомления.
     await unregisterToken()
-    //Вышел сам — возвращать «туда, где застал конец сессии» некуда и незачем.
-    dropResume()
-    notice.value = ''
     // Гасим токен и на сервере (чёрный список), а не только локально — безопасный выход.
     try { await authApi.logout() } catch { /* офлайн — всё равно чистим локально */ }
     //«Вышел и не вошёл» — это ТОЖЕ другая сессия: запоздавший успешный refresh иначе
@@ -296,6 +294,7 @@ export const useAuthStore = defineStore('auth', () => {
     useMessengerStore().reset()   // и переписку в памяти — тем же соображением
     useVectorStore().reset()      // и диалог с Вектором: он тоже жил в памяти store
     useProfileStore().reset()     // и профиль (аватар/«о себе»/цвет/шрифт) — та же причина
+    useNavBadgesStore().reset()   // и счётчик уведомлений: чужое число новому человеку не показываем
     // Активность живёт ВНЕ страницы (плавающее окно поверх RouterView) и переживает смену
     // пользователя в той же вкладке: без сброса следующий вошедший увидел бы чужую
     // викторину поверх своего кабинета.
@@ -317,6 +316,11 @@ export const useAuthStore = defineStore('auth', () => {
     // аккаунта до появления сети, потеряет всё, что выставил.
     resetOfflineSession()
     user.value = null
+    //Причину «почему вы на форме входа» и адрес возврата гасим ПОСЛЕДНИМИ: пока выход ждал
+    //сервер, чужой запрос мог получить 401, поставить «время работы вышло» и запомнить
+    //страницу человеку, который вышел сам, — возвращать его туда некуда и незачем.
+    dropResume()
+    notice.value = ''
   }
 
   // Локальная очистка сессии без обращения к серверу (напр. при протухшем refresh).
@@ -329,6 +333,7 @@ export const useAuthStore = defineStore('auth', () => {
     useMessengerStore().reset()
     useVectorStore().reset()
     useProfileStore().reset()
+    useNavBadgesStore().reset()
     useActivityStore().reset()
     useTrackerStore().reset()     // доска трекера и несохранённые правки — тоже чужие
     //И пасхалки: иначе тост «достижение открыто» от прошлого человека

@@ -9,9 +9,11 @@
 // ⚠️ Каждая сцена — ЛЕНИВАЯ (`defineAsyncComponent`). Вместе они весят прилично, а
 // сработает за сессию в лучшем случае одна: попади они в основной чанк, мы бы удлинили
 // первую загрузку журнала всем и каждый день ради того, что случается раз в месяц.
-import { defineAsyncComponent, computed } from 'vue'
+import { defineAsyncComponent, computed, watch, onBeforeUnmount } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { BY_ID } from '@/config/achievements'
+import AchievementBadge from '@/components/ui/AchievementBadge.vue'
+import { useLocaleStore } from '@/stores/locale'
 
 const easter = useEasterStore()
 
@@ -65,6 +67,16 @@ const SCENES = {
 
 const scene = computed(() => SCENES[easter.active] || null)
 const toast = computed(() => (easter.lastUnlocked ? BY_ID[easter.lastUnlocked] : null))
+const locale = useLocaleStore()
+
+// Тост гаснет сам: висел до клика и закрывал кнопку «Отправить» в чате (живой прогон
+// 27.10.2026). Шести секунд хватает прочитать название.
+let hideTimer = null
+watch(toast, (v) => {
+  clearTimeout(hideTimer)
+  if (v) hideTimer = setTimeout(() => easter.clearToast(), 6000)
+})
+onBeforeUnmount(() => clearTimeout(hideTimer))
 </script>
 
 <template>
@@ -73,13 +85,15 @@ const toast = computed(() => (easter.lastUnlocked ? BY_ID[easter.lastUnlocked] :
   <!-- Тост о находке. Живёт ОТДЕЛЬНО от сцены: сцена к этому моменту уже закрылась,
        а сказать про ачивку надо — иначе человек не поймёт, что что-то получил. -->
   <Transition name="ach">
-    <div v-if="toast" class="pointer-events-auto fixed bottom-4 right-4 z-[95] flex items-center gap-3
-                             rounded-xl border border-accent bg-card px-4 py-3 shadow-card"
+    <!-- Место то же, что у обычных тостов: на телефоне сверху, иначе ложится на поле ввода. -->
+    <div v-if="toast" class="pointer-events-auto fixed inset-x-4 top-[calc(env(safe-area-inset-top)+4rem)] z-[95] flex items-center gap-3
+                             rounded-xl border border-accent bg-card px-4 py-3 shadow-card
+                             sm:inset-x-auto sm:top-auto sm:right-4 sm:bottom-[calc(1rem+var(--gb-bottom-chrome))]"
          role="status" @click="easter.clearToast()">
-      <span class="text-2xl">{{ toast.icon }}</span>
+      <AchievementBadge :icon="toast.icon" :rarity="toast.rarity" :size="40" />
       <span class="flex flex-col leading-tight">
         <span class="text-sm font-semibold text-text">{{ toast.title }}</span>
-        <span class="font-mono text-[10px] uppercase tracking-wider text-text3">Достижение открыто</span>
+        <span class="font-mono text-[10px] uppercase tracking-wider text-text3">{{ locale.t('achievements.unlockedToast', 'Достижение открыто') }}</span>
       </span>
     </div>
   </Transition>

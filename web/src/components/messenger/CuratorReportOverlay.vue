@@ -109,11 +109,11 @@ function fmtGrade(v) {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
+  <div v-back-close class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center gap-2 border-b border-border p-4">
-        <button v-if="subject" type="button" @click="backToOverview" :aria-label="locale.t('curatorReport.back', 'Назад')"
+        <button v-if="subject" v-back-close type="button" @click="backToOverview" :aria-label="locale.t('curatorReport.back', 'Назад')"
                 class="grid size-8 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
           <ChevronLeft class="size-5" />
         </button>

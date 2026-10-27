@@ -23,6 +23,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const toast = useToast()
 const { confirm } = useConfirm()
@@ -606,7 +607,7 @@ function isHover(day, slot) {
                   @click="onCategoryChange(c.key)">{{ c.label }}</button>
         </div>
         <button class="text-xs text-text3 underline-offset-2 hover:text-accent hover:underline" @click="mode = ''">
-          {{ locale.t('schedulePage.backToChoice', '← к выбору') }}
+          <GbIcon name="back" class="inline-block size-4 align-[-3px]" />{{ locale.t('schedulePage.backToChoice', 'к выбору') }}
         </button>
       </div>
 
@@ -660,8 +661,8 @@ function isHover(day, slot) {
           </div>
 
           <div v-if="isCollege" class="ml-auto flex flex-wrap items-center gap-2">
-            <AppButton variant="ghost" size="sm" @click="refreshGroup">{{ locale.t('adminSchedule.pullFromPortal', '↻ Взять с ВСГУТУ') }}</AppButton>
-            <AppButton variant="ghost" size="sm" @click="refreshAll">{{ locale.t('adminSchedule.pullAllGroups', '↻ Все группы') }}</AppButton>
+            <AppButton variant="ghost" size="sm" @click="refreshGroup"><GbIcon name="refresh" class="size-4 shrink-0" />{{ locale.t('adminSchedule.pullFromPortal', 'Взять с ВСГУТУ') }}</AppButton>
+            <AppButton variant="ghost" size="sm" @click="refreshAll"><GbIcon name="refresh" class="size-4 shrink-0" />{{ locale.t('adminSchedule.pullAllGroups', 'Все группы') }}</AppButton>
             <AppButton variant="ghost" size="sm" @click="resetGroup">{{ locale.t('adminSchedule.resetGroupBtn', 'Сброс группы') }}</AppButton>
             <AppButton variant="ghost" size="sm" @click="resetAll">{{ locale.t('adminSchedule.resetAllBtn', 'Сброс всех') }}</AppButton>
             <AppButton variant="ghost" size="sm" :disabled="publishing || !group" @click="notifyGroup">{{ locale.t('adminSchedule.notifyGroupBtn', 'Сообщить группе') }}</AppButton>
@@ -731,9 +732,9 @@ function isHover(day, slot) {
                         <template v-if="cellSecond(day, slot).teacher"> · {{ cellSecond(day, slot).teacher }}</template>
                       </p>
                     </template>
-                    <span v-if="isConflict(day, slot)" class="absolute right-1 top-1 text-tiny font-bold text-red" :title="locale.t('adminSchedule.conflictTitle', 'Накладка')">⚠</span>
-                    <span v-else-if="isPending(day, slot)" class="absolute right-1 top-1 text-tiny text-accent" :title="locale.t('adminSchedule.unsavedTitle', 'Не сохранено')">●</span>
-                    <span v-else-if="isSaved(day, slot)" class="absolute right-1 top-1 text-tiny text-text3" :title="locale.t('adminSchedule.savedEditTitle', 'Сохранённая правка')">✎</span>
+                    <span v-if="isConflict(day, slot)" class="absolute right-1 top-1 text-red" :title="locale.t('adminSchedule.conflictTitle', 'Накладка')"><GbIcon name="warn" class="size-3.5" /></span>
+                    <span v-else-if="isPending(day, slot)" class="absolute right-1.5 top-1.5 size-2 rounded-full bg-accent" :title="locale.t('adminSchedule.unsavedTitle', 'Не сохранено')"></span>
+                    <span v-else-if="isSaved(day, slot)" class="absolute right-1 top-1 text-text3" :title="locale.t('adminSchedule.savedEditTitle', 'Сохранённая правка')"><GbIcon name="edit" class="size-3" /></span>
                   </div>
                 </td>
               </tr>

@@ -13,6 +13,7 @@ import { useRoute } from 'vue-router'
 import { PanelRightOpen } from '@lucide/vue'
 import Sidebar from '@/components/Sidebar.vue'
 import HeaderBar from '@/components/HeaderBar.vue'
+import BottomNav from '@/components/BottomNav.vue'
 import VectorDock from '@/components/VectorDock.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
 import ActivityLauncher from '@/components/activity/ActivityLauncher.vue'
@@ -26,6 +27,9 @@ import { useVectorStore } from '@/stores/vector'
 import { useActivityStore } from '@/stores/activity'
 import { useTtsStore } from '@/stores/tts'
 import { useMessengerStore } from '@/stores/messenger'
+import { useProfileStore } from '@/stores/profile'
+import { useNavBadgesStore } from '@/stores/navBadges'
+import { isHandheld } from '@/utils/device'
 import { shellBadgeTickDue } from '@/utils/livePolling'
 import { useLocaleStore } from '@/stores/locale'
 
@@ -38,6 +42,8 @@ const vector = useVectorStore()
 const activity = useActivityStore()
 const tts = useTtsStore()
 const messenger = useMessengerStore()
+const profile = useProfileStore()
+const navBadges = useNavBadgesStore()
 const route = useRoute()
 const sidebarOpen = ref(false)
 
@@ -164,6 +170,31 @@ if (typeof window !== 'undefined') {
   _mq.addEventListener('change', _onMq)
 }
 const dockShown = computed(() => showDock.value && !vector.collapsed && isLg.value)
+
+// ━━━ НИЖНЯЯ ПАНЕЛЬ (телефон, §4.51) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Есть везде, где нет постоянного сайдбара. Уступает место в двух случаях, как в
+// мессенджерах и почте больших компаний: внутри открытой беседы (там свой «назад» и
+// поле ввода у нижнего края) и пока набирают текст — экранная клавиатура и так съела
+// полэкрана, а панель над ней отняла бы ещё 64 px у поля, в которое пишут.
+const tabbar = computed(() => !embed && !isLg.value)
+const chatOpen = computed(() => route.path.endsWith('/messages') && !!messenger.activeId)
+const typing = ref(false)
+const tabbarShown = computed(() => tabbar.value && !chatOpen.value && !typing.value)
+
+const _NO_KEYBOARD = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'range',
+  'color', 'file', 'image'])
+function opensKeyboard(el) {
+  if (!el) return false
+  if (el.isContentEditable || el.tagName === 'TEXTAREA') return true
+  return el.tagName === 'INPUT' && !_NO_KEYBOARD.has((el.type || 'text').toLowerCase())
+}
+//Палец, а не мышь: в узком окне браузера на ПК клавиатуры на экране нет, прятать незачем.
+//`focusout` смотрит на фокус после такта: переход между полями — не закрытие клавиатуры.
+let _handheld = false
+const _onFocusIn = (e) => { if (_handheld) typing.value = opensKeyboard(e.target) }
+const _onFocusOut = () => {
+  if (_handheld) setTimeout(() => { typing.value = opensKeyboard(document.activeElement) }, 0)
+}
 const vectorShown = computed(() => onVectorPage.value || dockShown.value)
 watch(vectorShown, (now, was) => { if (was && !now) tts.stop() })
 
@@ -183,6 +214,17 @@ onMounted(() => {
   // локальную зеркальную копию, а не на бой.
   if (embedMode !== '1') theme.loadFromPrefs()
   messenger.loadChats()
+  //Профиль, свой статус, слежение «отошёл» и значок уведомлений — здесь, а не в карточке
+  //себя внутри меню (23.10.2026): на телефоне меню смонтировано, лишь пока открыта шторка,
+  //и до первого её открытия в шапке не было аватарки, не приезжал срок работы без связи
+  //(`offline_grace_min` идёт с профилем), а статус не становился «отошёл».
+  profile.load()
+  messenger.loadMyStatus()
+  messenger.startIdleWatch()
+  navBadges.start()
+  _handheld = isHandheld()
+  document.addEventListener('focusin', _onFocusIn)
+  document.addEventListener('focusout', _onFocusOut)
   //Прогрев идёт в простое время и НИЧЕГО не блокирует: экран уже показан. Смысл —
   //офлайн-кэш браузера и мгновенный первый переход по меню (см. utils/routePrefetch.js).
   prefetchRoutes(appRoutes, auth.role)
@@ -220,6 +262,9 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (_mq) _mq.removeEventListener('change', _onMq)
+  navBadges.stop()
+  document.removeEventListener('focusin', _onFocusIn)
+  document.removeEventListener('focusout', _onFocusOut)
   if (_unreadTimer) clearInterval(_unreadTimer)
   if (_onVisible) document.removeEventListener('visibilitychange', _onVisible)
 })
@@ -338,7 +383,7 @@ onMounted(askLoginEggs)
 
     <!-- Мобайл: выезжающий сайдбар -->
     <transition name="drawer">
-      <div v-if="sidebarOpen" class="fixed inset-0 z-40 lg:hidden">
+      <div v-back-close="closeDrawer" v-if="sidebarOpen" class="fixed inset-0 z-40 lg:hidden">
         <div class="absolute inset-0" style="background: var(--gb-overlay)" @click="closeDrawer" />
         <div class="gb-drawer-panel absolute inset-y-0 left-0 z-50 shadow-xl" @click="onDrawerPanelClick">
           <Sidebar :open="sidebarOpen" :pending="pendingTo" @navigate="onDrawerNavigate" />
@@ -349,10 +394,14 @@ onMounted(askLoginEggs)
     <div class="flex min-h-0 min-w-0 flex-1 flex-col">
       <!-- Компактная полоса — ТОЛЬКО телефон (сама прячется с lg): там сайдбар за
            бургером, и без неё не было бы ни меню, ни понимания, какой раздел открыт. -->
-      <HeaderBar v-if="!chromeless" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
+      <!-- С нижней панелью кнопка «Меню» живёт в ней, у большого пальца, и вторая такая
+           же сверху была бы двумя дверьми в одно место. -->
+      <HeaderBar v-if="!chromeless" :menu-button="!tabbar" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
 
       <!-- Контент: мягкий фон + сетка (как AnimatedBackground в десктопе) -->
-      <main id="gb-main" tabindex="-1" class="app-canvas min-h-0 flex-1 overflow-y-auto outline-none" style="padding-bottom: env(safe-area-inset-bottom)">
+      <!-- Нижнюю безопасную зону занимает панель, когда она есть; без неё — `main`. -->
+      <main id="gb-main" tabindex="-1" class="app-canvas min-h-0 flex-1 overflow-y-auto outline-none"
+            :style="{ paddingBottom: tabbarShown ? '0px' : 'env(safe-area-inset-bottom)' }">
         <!-- Отступы ужаты (3.5.6): было p-4 / sm:px-7 sm:py-6 — «жирная рамка» вокруг
              активного окна съедала полосу по всему периметру, ничего в ней не показывая. -->
         <!-- Правый отступ добавляем ТОЛЬКО когда у края висит вкладка-возврат Вектора:
@@ -396,6 +445,7 @@ onMounted(askLoginEggs)
           </RouterView>
         </div>
       </main>
+      <BottomNav v-if="tabbarShown" @menu="sidebarOpen = !sidebarOpen" />
     </div>
 
     <!-- Боковой Вектор — ОВЕРЛЕЙ поверх страницы, а не колонка в потоке (живой отзыв

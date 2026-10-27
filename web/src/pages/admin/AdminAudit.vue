@@ -14,7 +14,7 @@
 // не журнал. Кнопок удаления и правки здесь нет и быть не должно.
 import { ref, computed, onMounted } from 'vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
-import { RefreshCw, Search, ShieldAlert, ShieldCheck } from '@lucide/vue'
+import { RotateCw, Search, ShieldAlert, ShieldCheck } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import Card from '@/components/ui/Card.vue'
@@ -117,7 +117,7 @@ async function checkIntegrity() {
         </select>
         <button type="button" @click="load" :disabled="loading"
                 class="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
-          <RefreshCw :size="14" :class="loading ? 'animate-spin' : ''" />
+          <RotateCw :size="14" :class="loading ? 'animate-spin' : ''" />
           {{ locale.t('common.refresh', 'Обновить') }}
         </button>
         <button type="button" @click="checkIntegrity" :disabled="checking"

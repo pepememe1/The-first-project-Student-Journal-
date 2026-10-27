@@ -10,6 +10,7 @@ import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
+import IconButton from '@/components/ui/IconButton.vue'
 
 const props = defineProps({ userId: { type: String, required: true }, userName: { type: String, default: '' } })
 const emit = defineEmits(['close'])
@@ -151,8 +152,8 @@ async function resetToDefault() {
                 {{ (r.permissions || []).map(p => PERM_LABELS[p] || p).join(', ') || locale.t('roleManager.noSpecialPerms', 'без особых прав') }}
               </div>
             </button>
-            <button type="button" :title="locale.t('roleManager.edit', 'Изменить')" class="shrink-0 text-text3 hover:text-accent" @click="startEdit(r)">✎</button>
-            <button type="button" :title="locale.t('common.delete')" class="shrink-0 text-text3 hover:text-red" @click="removeRole(r)">✕</button>
+            <IconButton icon="edit" :label="locale.t('roleManager.edit', 'Изменить')" @click="startEdit(r)" />
+            <IconButton icon="delete" tone="danger" :label="locale.t('common.delete')" @click="removeRole(r)" />
           </div>
 
           <p class="mb-1 mt-3 text-[11px] uppercase tracking-wide text-text3">{{ locale.t('roleManager.templates', 'Шаблоны') }}</p>

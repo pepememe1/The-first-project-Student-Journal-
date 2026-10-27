@@ -91,7 +91,7 @@ const VERDICT_CLASS = { key: 'text-red font-semibold', weak: 'text-orange', triv
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
+  <div v-back-close class="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
        @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-2xl border border-border2 bg-card shadow-xl">
       <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border2 px-4 py-3">

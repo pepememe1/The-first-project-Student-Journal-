@@ -4,10 +4,10 @@
 // профиля человека; для ролей вне списка (роль неизвестна/не передана — маскот,
 // групповой чат и т.п.) — инициалы по ФИО, как было. Единый вид во всех местах
 // (список чатов, карточка, каталог людей, модерация).
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useLocaleStore } from '@/stores/locale'
 import RoleAvatarIcon from '@/components/ui/RoleAvatarIcon.vue'
-import { mediaSrc } from '@/utils/mediaSrc'
+import { gifPosterSrc, gifVideoSrc, mediaSrc, playMuted, watchInView } from '@/utils/mediaSrc'
 const locale = useLocaleStore()
 
 const props = defineProps({
@@ -38,7 +38,27 @@ const shown = computed(() => mediaSrc(props.src))
 //Не загрузилась (сменили аватарку, а список ещё не перечитан; нет сети) — рисуем значок
 //роли или инициалы, а не пустой кружок. Новая ссылка — новая попытка.
 const failed = ref(false)
-watch(shown, () => { failed.value = false })
+//Гифка Klipy — как аватарки Discord: сразу первый кадр (webp, десятки КБ), следом ролик
+//MP4, который браузер показывает по мере загрузки, а не целым файлом. Ролик качается,
+//только когда аватарку видно, и стоит на паузе вне экрана (utils/mediaSrc.js).
+const video = computed(() => gifVideoSrc(props.src))
+const poster = computed(() => gifPosterSrc(props.src))
+const videoFailed = ref(false)
+watch(shown, () => { failed.value = false; videoFailed.value = false })
+const box = ref(null)
+const videoEl = ref(null)
+const seen = ref(false)
+let unwatch = () => {}
+onMounted(() => {
+  unwatch = watchInView(box.value, (visible) => {
+    if (visible) seen.value = true
+    const v = videoEl.value
+    if (!v) return
+    if (visible) v.play?.()?.catch?.(() => {})
+    else v.pause?.()
+  })
+})
+onBeforeUnmount(() => unwatch())
 
 const initials = computed(() => {
   const p = (props.name || '').trim().split(/\s+/)
@@ -47,9 +67,16 @@ const initials = computed(() => {
 </script>
 
 <template>
-  <div class="relative shrink-0" :style="{ width: size + 'px', height: size + 'px' }">
-    <div class="size-full overflow-hidden rounded-full" :class="hasRoleIcon || (shown && !failed) ? '' : 'bg-accent'">
-      <img v-if="shown && !failed" :src="shown" alt="" class="size-full object-cover"
+  <div ref="box" class="relative shrink-0" :style="{ width: size + 'px', height: size + 'px' }">
+    <div class="size-full overflow-hidden rounded-full" :class="hasRoleIcon || (shown && !failed) || (video && !videoFailed) ? '' : 'bg-accent'">
+      <template v-if="video && !videoFailed">
+        <video v-if="seen" ref="videoEl" :src="video" :poster="poster" autoplay muted loop playsinline
+               preload="auto" disablepictureinpicture aria-hidden="true" class="size-full object-cover"
+               :style="{ objectPosition: position }" @canplay="playMuted" @error="videoFailed = true" />
+        <img v-else :src="poster" alt="" decoding="async" class="size-full object-cover"
+             :style="{ objectPosition: position }" />
+      </template>
+      <img v-else-if="shown && !failed" :src="shown" alt="" class="size-full object-cover"
            :style="{ objectPosition: position }" @error="failed = true" />
       <RoleAvatarIcon v-else-if="hasRoleIcon" :role="role" :color="color || undefined" />
       <span v-else class="grid size-full place-items-center font-bold text-white"
