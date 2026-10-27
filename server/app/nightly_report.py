@@ -37,6 +37,9 @@ import college_clock  # noqa: E402
 TZ_OFFSET_MIN = college_clock.UTC_OFFSET_H * 60
 _TZ = college_clock.TZ
 
+#Сторож уязвимостей ходит раз в час; три часа тишины — таймер встал или OSV недоступен.
+VULNWATCH_MAX_AGE_H = 3
+
 #Пороги «требует внимания». Каждый — про потерю данных или доступности, а не косметику.
 DISK_MIN_FREE_PCT = 15          #ниже — бэкап начнёт пропускать снимки (нужно 1.5× базы)
 MEM_MIN_AVAIL_MB = 120          #ниже — torch Silero уводит машину в своп
@@ -287,6 +290,21 @@ def _server(db) -> dict:
     return out
 
 
+def _security(now: float) -> dict:
+    """Что нашёл и поставил сторож уязвимостей (`vuln_watch`, раз в час) за сутки."""
+    from . import vuln_watch
+    st = vuln_watch.read_state()
+    if not st:
+        return {"known": False}
+    return {"known": True,
+            "age_h": round((now - float(st.get("checked_at") or 0)) / 3600, 1),
+            "open": [{k: v.get(k) for k in ("package", "version", "id", "fixed", "kev", "summary")}
+                     for v in st.get("python") or []],
+            "actions": [h for h in st.get("history") or [] if (h.get("ts") or 0) >= now - 86400],
+            "errors": st.get("errors") or [],
+            "hold": sorted(vuln_watch.HOLD)}
+
+
 def collect(db, now: float | None = None) -> dict:
     """Все цифры сводки за последние сутки. Каждая часть независима (см. шапку)."""
     now = now or time.time()
@@ -294,7 +312,8 @@ def collect(db, now: float | None = None) -> dict:
     data: dict = {"now": now, "since": since}
     for name, fn in (("activity", lambda: _activity(db, since, now)),
                      ("honeypot", lambda: _honeypot(db, since, now)),
-                     ("server", lambda: _server(db))):
+                     ("server", lambda: _server(db)),
+                     ("security", lambda: _security(now))):
         try:
             data[name] = fn()
         except Exception as e:      # noqa: BLE001
@@ -308,7 +327,7 @@ def alerts(d: dict) -> list:
     """Что требует внимания. Пусто — «всё в порядке» в теме письма."""
     out = []
     s, hp = d.get("server") or {}, d.get("honeypot") or {}
-    for part in ("activity", "honeypot", "server"):
+    for part in ("activity", "honeypot", "server", "security"):
         if (d.get(part) or {}).get("error"):
             out.append("Не собрался раздел «%s»: %s" % (part, d[part]["error"]))
     disk = s.get("disk") or {}
@@ -341,6 +360,25 @@ def alerts(d: dict) -> list:
             out.append("Служба %s: %s" % (name, state))
     if s.get("reboot_required"):
         out.append("Система просит перезагрузку после обновлений")
+    sec = d.get("security") or {}
+    if sec.get("known"):
+        if sec.get("age_h", 0) > VULNWATCH_MAX_AGE_H:
+            out.append("Сторож уязвимостей не запускался %.0f ч — проверь gb-vulnwatch.timer"
+                       % sec["age_h"])
+        for v in sec.get("open") or []:
+            if v.get("kev"):
+                out.append("🔴 %s %s: %s — уже используют в атаках (CISA KEV)%s" % (
+                    v["package"], v["version"], v["id"],
+                    ", исправление %s не встало само" % v["fixed"] if v.get("fixed") else
+                    ", исправления ещё нет"))
+            elif v.get("fixed") and v["package"] not in (sec.get("hold") or []):
+                out.append("Дыра %s в %s %s: исправление %s есть, но не встало само"
+                           % (v["id"], v["package"], v["version"], v["fixed"]))
+        for h in sec.get("actions") or []:
+            if not h.get("ok"):
+                out.append("Автообновление не прошло: %s" % h.get("detail"))
+        for e in sec.get("errors") or []:
+            out.append("Сторож уязвимостей: %s" % e)
     if hp.get("honeytoken"):
         out.append("🍯 Вход под учёткой-приманкой (%d) — значит, утёк дамп базы или файл "
                    "окружения" % hp["honeytoken"])

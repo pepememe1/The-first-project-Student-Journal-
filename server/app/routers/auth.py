@@ -19,7 +19,7 @@ from ..models import User, AuthSession, set_user_password
 from ..schemas import LoginIn, TokenOut, BootstrapIn, RefreshIn
 from ..security import MIN_PASSWORD_LEN, verify_password, create_token_full, decode_token
 from ..config import issue_ttl_min, session_ttl_min
-from .. import throttle, events, audit, canary, config, honeypot
+from .. import throttle, events, audit, canary, config, honeypot, client_app
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -50,17 +50,18 @@ def _record_session(db: Session, jti: str, login: str, role: str, kind: str,
     `user_agent` и `trusted_device_id` (4.0) — для раздела «Сессии» у самого человека:
     по первому он узнаёт своё устройство, по второму сессия живёт без потолка по
     возрасту, пока устройство доверенное."""
-    dev = ip = ua = ""
+    dev = ip = ua = app = ""
     try:
         if request is not None:
             dev = request.headers.get("X-Device-Id", "") or ""
+            app = client_app.label(request.headers.get("x-gb-app"))
             ip = throttle.client_ip(request)
             ua = (request.headers.get("user-agent", "") or "")[:300]
     except Exception:
         pass
     db.add(AuthSession(jti=jti, login=login, role=role, kind=kind, device_id=dev,
                        ip=ip, issued_at=_now(), expires_at=int(exp), revoked=False,
-                       pair_jti=pair_jti, client=client, user_agent=ua,
+                       pair_jti=pair_jti, client=client, user_agent=ua, app_version=app,
                        last_seen_at=_now(), trusted_device_id=trusted_device_id or ""))
 
 

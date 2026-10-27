@@ -784,7 +784,7 @@ def migrate_step(step_id: str, source: dict, target: dict) -> dict:
 #В нём не было НИЧЕГО из того, что добавлялось после его написания: `gostcrypto` и
 #`cryptography` (хеш пароля и шифрование ПДн), `sqlcipher3-binary` (шифрование файла
 #базы — то есть перенесённый сервер держал бы ПДн студентов открытым текстом),
-#`python-jose` (JWT — вход не работал бы вовсе), `openpyxl`/`python-docx` (выгрузки),
+#`PyJWT` (JWT — вход не работал бы вовсе), `openpyxl`/`python-docx` (выгрузки),
 #`webauthn`, `gigachat`, `pdfplumber`, `requests`, `pydantic`, `starlette`.
 #Часть отказов была бы ГРОМКОЙ (сервер не поднялся), а часть — ТИХОЙ, и это хуже:
 #шифрование базы просто не включилось бы, и узнали бы об этом на проверке.

@@ -188,6 +188,22 @@ async def _media_features(request: Request, call_next):
 
 
 @app.middleware("http")
+async def _force_update(request: Request, call_next):
+    """Приложение, отставшее на MAX_RELEASES_BEHIND выпусков, получает 426 и экран
+    «обновите приложение» (`client_app`, решение Ярослава 27.10.2026). Адреса обновления
+    пропускаются, иначе обновиться было бы нечем."""
+    from . import client_app
+    behind = client_app.update_required(request.headers.get("x-gb-app"), request.url.path)
+    if behind:
+        return JSONResponse(
+            {"detail": "Приложение устарело: вышло %d новых выпусков. Обновите его, "
+                       "чтобы журнал работал правильно." % behind,
+             "update_required": True, "behind": behind},
+            status_code=426, headers={"X-Gb-Reason": "update_required"})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def _security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")

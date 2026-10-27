@@ -1,7 +1,7 @@
 <script setup>
 // ForwardPicker — выбор беседы(-д) для пересылки сообщений. Показывает список чатов
 // пользователя; можно отметить несколько и переслать. Наверх уходит список conversation_id.
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { X, Check } from '@lucide/vue'
 import { useMessengerStore } from '@/stores/messenger'
@@ -16,6 +16,9 @@ const m = useMessengerStore()
 const locale = useLocaleStore()
 const { chats } = storeToRefs(m)
 const chosen = ref([])
+// Беседу открыли прямой ссылкой или из уведомления — список чатов ещё не загружен, и
+// пересылать было некуда, кроме текущей (живой прогон 27.10.2026). Догружаем сами.
+onMounted(() => { if (chats.value.length < 2) m.loadChats({ invites: false }) })
 
 function toggle(id) {
   const i = chosen.value.indexOf(id)

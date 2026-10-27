@@ -9,6 +9,7 @@ import { flushOutbox, startOutboxWatch } from '@/api/outbox'
 import { initDurableOutbox } from '@/services/durableOutbox'
 import { useAuthStore } from '@/stores/auth'
 import ToastHost from '@/components/ui/ToastHost.vue'
+import ForceUpdate from '@/components/ui/ForceUpdate.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { rememberResume } from '@/utils/sessionResume'
@@ -85,5 +86,6 @@ onMounted(() => {
 <template>
   <RouterView />
   <ToastHost />
+  <ForceUpdate />
   <ConfirmDialog />
 </template>

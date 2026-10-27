@@ -595,7 +595,12 @@ def _mute_refusal(row) -> dict:
     из подписи. Поле `message` оставлено для тех мест, где ответ показывают как есть."""
     until = (getattr(row, "muted_until", "") or "").strip()
     reason = (getattr(row, "reason", "") or "").strip()
-    tail = " до " + until if until else " бессрочно"
+    #В тексте — время колледжа словами, а не ISO в UTC (живой прогон 27.10.2026: человек
+    #видел «до 2026-10-27T05:00:00+00:00»). Машинное значение остаётся в `muted_until`.
+    import college_clock
+    moment = college_clock.local_from_iso(until) if until else None
+    tail = (" до " + moment.strftime("%d.%m.%Y %H:%M") + " по времени колледжа") if moment else \
+        (" до " + until if until else " бессрочно")
     return {
         "message": "Вы ограничены модерацией и не можете отправлять сообщения" + tail + ".",
         "muted": True,

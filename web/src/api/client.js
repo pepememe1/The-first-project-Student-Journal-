@@ -19,6 +19,7 @@ import { isCacheable, writeCache, readCache, servingStale } from './offlineCache
 import { noteOffline, noteOnline } from './offlineSession'
 import { getApiBase, isNativeApp } from './server'
 import { isOwnResponse } from './responseOwner'
+import { appTag } from '../utils/appTag'
 
 /**
  * Чем мы представляемся серверу: 'android' в приложении, 'web' в браузере.
@@ -83,6 +84,8 @@ api.interceptors.request.use((config) => {
   //17.10.2026). Просит сам клиент: старые сборки о `/media/avatar` не знают, и сервер
   //отдаёт им картинку как раньше. Рисует ссылку `utils/mediaSrc.js`.
   config.headers['X-Gb-Features'] = 'avatar-refs'
+  const tag = appTag()
+  if (tag) config.headers['X-Gb-App'] = tag
   //🔒 Кому принадлежит запрос — решается ЗДЕСЬ, на отправке, и едет вместе с ним
   //(находка O03). На ответе это уже не узнать: пока он шёл, человек мог смениться.
   config.__owner = currentOwner()
@@ -230,6 +233,11 @@ api.interceptors.response.use(
     // увидел бы россыпь «нет прав» на исправных страницах и пошёл бы искать, кто
     // отобрал у него доступ, — вместо настройки за минуту. Заголовок для того и
     // машиночитаемый.
+    // Приложение отстало на пять выпусков: экран «обновите» (components/ui/ForceUpdate.vue).
+    if (response?.status === 426 && response.headers?.['x-gb-reason'] === 'update_required') {
+      window.dispatchEvent(new CustomEvent('gb:update-required', { detail: response.data || {} }))
+      return Promise.reject(error)
+    }
     if (response?.status === 403 && response.headers?.['x-gb-reason'] === 'mfa_setup_required') {
       if (mfaSetupHandler) mfaSetupHandler(response.data?.detail || '')
       return Promise.reject(error)

@@ -1,0 +1,15 @@
+# GradeBookAI — сторож уязвимостей (server/app/vuln_watch.py), 27.10.2026.
+# Кладётся в /etc/systemd/system/; запускается таймером gb-vulnwatch.timer раз в час.
+# Окружение то же, что у службы gradebook: тот же venv и ГОСТ-провайдер OpenSSL.
+[Unit]
+Description=GradeBookAI vulnerability watch (OSV + CISA KEV, auto-patch)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/gb-deploy/server
+Environment=OPENSSL_CONF=/root/gb-deploy/gost-prov.cnf
+ExecStart=/root/gb-deploy/venv/bin/python -m app.vuln_watch
+TimeoutStartSec=45min
+Nice=10

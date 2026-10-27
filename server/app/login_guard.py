@@ -39,7 +39,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError   # PyJWT: python-jose заброшен, CVE-2026-85394 без исправления
 
 from . import audit, config, events, gost, mailer, reg_utils, shared_state, throttle
 from .models import TrustedDevice, User, UserContact

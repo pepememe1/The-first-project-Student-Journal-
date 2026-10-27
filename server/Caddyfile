@@ -113,6 +113,33 @@ esstu-gradebook.ru {
 		minimum_length 1024
 	}
 
+	# ━━ РУБИЛЬНИК ОБСЛУЖИВАНИЯ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	# Есть файл-флаг — весь сайт и API отвечают 503 со страницей «технические работы».
+	# Включает и выключает `deploy/maintenance/gb_maintenance.sh on|off`; перезагрузка
+	# Caddy не нужна: матчер `file` проверяет флаг на каждом запросе. Блок стоит ПЕРВЫМ
+	# среди `handle` с именованным матчером — такие идут в порядке записи, и статика с
+	# прокси под ним уже не срабатывают. Картинки страницы лежат под /_maint/ и
+	# отдаются с кодом 200: часть браузеров не рисует картинку из ответа 503.
+	@maintenance file {
+		root /var/www/gb-maintenance
+		try_files /maintenance.on
+	}
+	handle @maintenance {
+		root * /var/www/gb-maintenance
+		header Cache-Control "no-store"
+		@maint_asset path /_maint/*
+		handle @maint_asset {
+			file_server
+		}
+		handle {
+			header Retry-After "900"
+			rewrite * /index.html
+			file_server {
+				status 503
+			}
+		}
+	}
+
 	# ━━ НЕИЗМЕНЯЕМАЯ СТАТИКА — МИМО PYTHON ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 	# Раньше КАЖДЫЙ ассет будил uvicorn: на одноядерной машине это Python-обработчик
 	# ради отдачи файла с диска. Теперь их отдаёт Caddy напрямую и заранее сжатыми.

@@ -1963,6 +1963,10 @@ async def _refresh_mirror_after_write() -> None:
 #знает, кто вошёл, — он выпускает сессию сам. Снаружи страница недостижима: сервер
 #слушает только петлю.
 _BOOTSTRAP_PATH = "/desktop/bootstrap"
+#Как программа называет себя боевому серверу (server/app/client_app.py).
+import desktop_update as _desktop_update      # noqa: E402 — корневой модуль, stdlib
+
+_APP_TAG = "exe/" + _desktop_update.release_number()
 
 
 def _saved_session_alive() -> bool:
@@ -2401,7 +2405,7 @@ def _forward_to_server(method: str, path: str, payload: dict = None,
         return 503, {"detail": f"Нет пакета httpx ({e}) — установите зависимости."}
     try:
         r = httpx.request(method, f"{base}{path}", json=payload, params=params,
-                          headers={"X-Device-Id": machine_device_id()}, timeout=20.0)
+                          headers={"X-Device-Id": machine_device_id(), "X-Gb-App": _APP_TAG}, timeout=20.0)
     except Exception as e:
         _LOG.warning(f"[connect] {path}: {type(e).__name__}: {e}")
         return 503, {"detail": "Нет связи с сервером. Проверьте интернет."}
@@ -2502,7 +2506,7 @@ def _try_remote_login(login: str, password: str):
     #в экран подтверждения устройства (см. `login_failure_response`).
     try:
         r = httpx.post(f"{base}/auth/login", json={"login": login, "password": password},
-                       headers={"X-Device-Id": machine_device_id()}, timeout=20.0)
+                       headers={"X-Device-Id": machine_device_id(), "X-Gb-App": _APP_TAG}, timeout=20.0)
     except Exception as e:
         return None, f"offline: {type(e).__name__}: {e}"
     if r.status_code == 200:

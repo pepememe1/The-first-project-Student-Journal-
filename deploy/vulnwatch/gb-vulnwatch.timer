@@ -1,0 +1,12 @@
+# Раз в час: исправление ставится в пределах часа после публикации, а не в ночь.
+[Unit]
+Description=GradeBookAI vulnerability watch, hourly
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

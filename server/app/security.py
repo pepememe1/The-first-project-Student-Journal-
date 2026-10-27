@@ -17,7 +17,8 @@ import os
 import secrets
 import time
 
-from jose import jwt, JWTError
+import jwt
+from jwt import PyJWTError as JWTError   # PyJWT: python-jose заброшен, CVE-2026-85394 без исправления
 
 from .config import JWT_SECRET, JWT_ALG, JWT_TTL_MIN, JWT_REFRESH_TTL_MIN
 

@@ -741,6 +741,29 @@ def _images(d: dict) -> dict:
     return imgs
 
 
+def _security_block(sec: dict) -> str:
+    """Защита: что сторож уязвимостей нашёл и поставил сам за сутки."""
+    if not sec.get("known"):
+        return ""
+    rows = []
+    for h in sec.get("actions") or []:
+        rows.append("<div style='padding:7px 0;border-top:1px solid %s;font-size:13.5px;"
+                    "color:%s'>%s %s</div>" % (LINE, TEXT, "✅" if h.get("ok") else "⚠️",
+                                               _e("%s: %s" % ("Python" if h.get("kind") == "python"
+                                                              else "ОС и Caddy", h.get("detail")))))
+    for v in sec.get("open") or []:
+        rows.append("<div style='padding:7px 0;border-top:1px solid %s;font-size:13.5px;"
+                    "color:%s'>%s %s</div>" % (LINE, TEXT, "🔴" if v.get("kev") else "•", _e(
+                        "%s %s — %s: %s" % (v.get("package"), v.get("version"), v.get("id"),
+                                            ("исправление %s" % v["fixed"]) if v.get("fixed")
+                                            else "исправления пока нет"))))
+    if not rows:
+        rows.append("<div style='font-size:13.5px;color:%s'>Известных дыр в пакетах сервера нет, "
+                    "обновлять было нечего.</div>" % MUTED)
+    sub = "проверка раз в час по базам OSV и CISA KEV · последняя %s ч назад" % sec.get("age_h")
+    return _card("Защита", "".join(rows), sub=sub, delay=5)
+
+
 def render_html(d: dict) -> tuple:
     """(html, inline) — страница письма и вложенные картинки `[(cid, байты, подтип)]`."""
     from . import config
@@ -758,6 +781,7 @@ def render_html(d: dict) -> tuple:
         _activity_block(a, imgs),
         _honeypot_block(hp, imgs, site),
         _server_block(s, imgs),
+        _security_block(d.get("security") or {}),
         _fact_block(d["now"]),
         "<div style='text-align:center;padding:6px 10px 2px'>"
         "<a href='%s' style='color:%s;font-size:13px;font-weight:700;text-decoration:none;"
@@ -810,6 +834,12 @@ def render_text(d: dict) -> str:
     lines.append("Сервер: диск свободно %s из %s, сайт %s, журнал %s"
                  % (_mb(disk.get("free")), _mb(disk.get("total")),
                     (s.get("site") or {}).get("code"), s.get("audit_chain")))
+    sec = d.get("security") or {}
+    if sec.get("known"):
+        lines.append("Защита: открытых дыр %d, действий за сутки %d"
+                     % (len(sec.get("open") or []), len(sec.get("actions") or [])))
+        lines += ["  %s %s" % ("ok" if h.get("ok") else "СБОЙ", h.get("detail"))
+                  for h in sec.get("actions") or []]
     title, text = fact_of_the_day(d["now"])
     lines += ["", "Вектор объясняет — %s: %s" % (title, text), "",
               "Только агрегированные числа: персональных данных в письме нет."]

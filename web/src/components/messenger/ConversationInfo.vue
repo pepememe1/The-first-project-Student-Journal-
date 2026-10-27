@@ -200,7 +200,21 @@ const roleDialogFor = ref(null)
 // списке участников попросту нет места показать).
 const profileFor = ref(null)
 
-function toggleMenu(uid) { openMenuFor.value = openMenuFor.value === uid ? null : uid }
+// Меню — fixed у кнопки, а не absolute в списке: список прокручивается (overflow-y-auto),
+// и меню нижних участников срезалось его краем (живой прогон 27.10.2026). Места снизу
+// мало — открываем вверх.
+const menuStyle = ref({})
+function toggleMenu(uid, e) {
+  if (openMenuFor.value === uid) { openMenuFor.value = null; return }
+  const r = e?.currentTarget?.getBoundingClientRect?.()
+  if (r) {
+    const right = Math.max(8, window.innerWidth - r.right)
+    menuStyle.value = window.innerHeight - r.bottom < 220
+      ? { right: right + 'px', bottom: (window.innerHeight - r.top + 4) + 'px' }
+      : { right: right + 'px', top: (r.bottom + 4) + 'px' }
+  }
+  openMenuFor.value = uid
+}
 // Клик вне меню участника — закрыть (нет глобальной v-click-outside директивы в проекте,
 // делаем локально одним слушателем на весь компонент).
 function onDocClick(e) {
@@ -658,12 +672,12 @@ function onChatAction(action) {
               </span>
               <!-- §ролей: меню участника — кик/игнор/роль. Игнор доступен всем (личное),
                    кик/роль — по правам. Себя выгнать/игнорировать нельзя из этого меню. -->
-              <button v-if="p.user_id !== myUserId" type="button" data-role-menu @click.stop="toggleMenu(p.user_id)"
+              <button v-if="p.user_id !== myUserId" type="button" data-role-menu @click.stop="toggleMenu(p.user_id, $event)"
                       :aria-label="locale.t('messenger.actions', 'Действия')" class="grid size-7 shrink-0 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
                 <EllipsisVertical class="size-4" />
               </button>
               <div v-if="openMenuFor === p.user_id" v-back-close="() => (openMenuFor = null)" data-role-menu
-                   class="absolute right-2 top-10 z-10 w-44 rounded-lg border border-border2 bg-card p-1 shadow-card">
+                   :style="menuStyle" class="fixed z-50 w-44 rounded-lg border border-border2 bg-card p-1 shadow-card">
                 <button type="button" @click="toggleIgnore(p)"
                         class="block w-full rounded-md px-2.5 py-1.5 text-left text-sm text-text2 hover:bg-bg2">
                   {{ myIgnoredIds.has(p.user_id) ? locale.t('conversationInfo.showMessages', 'Показать сообщения') : locale.t('conversationInfo.ignore', 'Игнорировать') }}

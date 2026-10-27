@@ -8,9 +8,17 @@
 // 180 штук. Раздел добавлен в /etc/apt/sources.list.d/ubuntu.sources. На новой машине
 // проверять первым делом: `apt-cache policy openssh-server` обязан показать noble-security.
 //
-// Ставятся только исправления безопасности (Allowed-Origins по умолчанию). Обычные
-// обновления noble-updates и Caddy из его собственного репозитория — вручную: они меняют
-// поведение, а не закрывают дыры, и Caddyfile сверяется с git (tools/check_prod_caddyfile.sh).
+// Ставятся исправления безопасности (Allowed-Origins по умолчанию) и Caddy из его
+// собственного репозитория. Обычные обновления noble-updates — вручную: они меняют
+// поведение, а не закрывают дыры.
+//
+// Caddy — с 27.10.2026, решение Ярослава после октябрьских дыр nginx: веб-сервер на
+// краю сети обновляется в срок, а не когда вспомнили. Caddyfile пакет не трогает
+// (conffile, unattended ставит с --force-confold), сверка с git — tools/check_prod_caddyfile.sh.
+// Источник проверен `apt-cache policy`: release o=cloudsmith/caddy/stable.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=cloudsmith/caddy/stable";
+};
 
 // Старые ядра и ставшие ненужными зависимости — убирать сразу, иначе /boot и диск
 // растут с каждым обновлением ядра.

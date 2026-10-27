@@ -1572,7 +1572,11 @@ const subtitle = computed(() => {
 const topPinned = computed(() => pinned.value[0] || null)
 //Подсказка в поле ввода: разметку показывают кнопки тулбара, поэтому в ней только то,
 //что иначе не найти — команда Вектора, и лишь в «Избранном», где она и работает.
+// Ограничение модерацией: поле выключено, иначе человек набирал текст и получал отказ
+// только на отправке (живой прогон 27.10.2026). В чате с модерацией писать можно.
+const composerLocked = computed(() => !!restriction.value?.muted && !isModeration.value)
 const composerHint = computed(() => {
+  if (composerLocked.value) return locale.t('restriction.title', 'Переписка ограничена модерацией')
   if (replyingToVector.value) return locale.t('chatThread.askVectorMore', 'Спросите Вектора дальше…')
   return isSaved.value ? locale.t('chatThread.notePlaceholder', 'Заметка… (/vector — спросить ИИ)') : locale.t('chatThread.messagePlaceholder', 'Сообщение…')
 })
@@ -1859,6 +1863,14 @@ function openActivities() {
             <GroupTag :group="peerGroup" :on-tint="!!headerTint" />
           </div>
           <div class="text-xs" :class="headerTint ? 'text-white/75' : 'text-text3'">{{ subtitle }}</div>
+        </button>
+        <!-- Явная кнопка «О беседе»: что шапка нажимается, догадывались не все — состав
+             группы находили только по «3 участника» (живой прогон 27.10.2026). -->
+        <button v-if="kind === 'group' || kind === 'channel'" type="button" @click="showInfo = true"
+                :aria-label="locale.t('chatThread.openInfo', 'О беседе')" :title="locale.t('chatThread.openInfo', 'О беседе')"
+                class="grid size-8 pointer-coarse:size-11 shrink-0 place-items-center rounded-md"
+                :class="headerTint ? 'text-white/80 hover:bg-white/15 hover:text-white' : 'text-text3 hover:bg-bg2 hover:text-text'">
+          <GbIcon name="info" class="size-5" />
         </button>
 
         <!-- Перевод и активности — на sm+ прямо в строке. Поиск, сводка и мьют переехали
@@ -2624,7 +2636,7 @@ function openActivities() {
                             @keydown="onComposerKeydown" @input="onComposerInput" @scroll="pinFieldScroll"
                             @select="updateFmtBubble" @mouseup="updateFmtBubble" @keyup="onComposerKeyup"
                             @paste="onComposerPaste" @blur="onComposerBlur"
-                            :disabled="mascotCooldown.active"
+                            :disabled="mascotCooldown.active || composerLocked"
                             class="gb-composer-box gb-composer-input border-none bg-transparent outline-none disabled:opacity-60" />
                 </div>
               </div>

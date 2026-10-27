@@ -17,6 +17,7 @@ from ..db import get_db
 from ..deps import require_admin
 from ..models import User, AuthSession
 from ..schemas import RevokeIn
+from .. import client_app
 from .. import events
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -56,6 +57,7 @@ def sessions(active: bool = Query(True),
         "device_id": s.device_id, "ip": s.ip, "issued_at": s.issued_at,
         "expires_at": s.expires_at, "revoked": bool(s.revoked),
         "expires_in_sec": max(0, int(s.expires_at) - now),
+        "app": s.app_version or client_app.guess(s.client, s.user_agent),
     } for s in rows]
     return {"sessions": out, "count": len(out), "now": now}
 

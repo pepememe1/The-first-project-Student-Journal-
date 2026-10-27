@@ -187,6 +187,9 @@ class SyncClient:
                 h["X-Device-Id"] = dev
         except Exception:
             pass
+        #Выпуск программы — для раздела «Сессии» и обязательного обновления (client_app).
+        import desktop_update
+        h["X-Gb-App"] = "exe/" + desktop_update.release_number()
         if self.token:
             h["Authorization"] = f"Bearer {self.token}"
         return h

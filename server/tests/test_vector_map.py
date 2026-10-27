@@ -178,14 +178,14 @@ def test_every_role_gets_an_answer_to_every_question(built):
 #   student | teacher (ведёт и курирует) | teacher_subject (только ведёт) | admin |
 #   moderator | parent (кабинет ребёнка)
 #
-#⚠️ ТРИ КЛЕТКИ ЗАПИСАНЫ КАК ЕСТЬ, А НЕ КАК НАДО (найдены картой 07.10.2026, не чинены):
+#⚠️ ОДНА КЛЕТКА ЗАПИСАНА КАК ЕСТЬ, А НЕ КАК НАДО (найдена картой 07.10.2026, не чинена):
 #  • «оценки Сидорова» — человека с такой фамилией нет, и разбор фамилию не видит вовсе
 #    (он сверяет слова со списком известных): вопрос отвечается так, будто фамилии не
 #    было. Студент получает СВОИ оценки, администратор — сводку. Чужих данных в ответе
 #    нет, но человеку не сказано, что такого студента не нашлось;
-#  • «что у меня по математике» у преподавателя, который математику не ведёт, — предмет
-#    молча отбрасывается, ответ — общая сводка по его группам;
-#  • «кто ведет математику» — ответ один на все предметы (весь список преподавателей).
+#Починены 27.10.2026: «что у меня по математике» у преподавателя, который её не ведёт, —
+#теперь прямой ответ «не в вашей нагрузке» (help), а не общая сводка; «кто ведет
+#математику» — только преподаватели этого предмета, а не весь список.
 #Чинить — значит менять клетку здесь тем же заходом.
 ROUTES = """
 привет                      | hello | hello | hello | hello | hello | hello
@@ -197,7 +197,7 @@ ROUTES = """
 какая погода                | weather | weather | weather | weather | weather | weather
 какой у меня средний балл   | average | group_stats | group_stats | group_stats | help | average
 покажи мои оценки           | grades | group_stats | group_stats | group_stats | help | grades
-что у меня по математике    | subject_grades | subject_grades | group_stats | subject_grades | help | subject_grades
+что у меня по математике    | subject_grades | subject_grades | help | subject_grades | help | subject_grades
 сколько у меня оценок       | grade_count | help | help | help | help | grade_count
 сколько оценок по математике | grade_count | help | help | help | help | grade_count
 есть ли долги               | debtors | debtors | debtors | debtors | help | debtors

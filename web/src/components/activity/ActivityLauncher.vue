@@ -69,7 +69,8 @@ const quizSearch = ref('')
 const limitSec = ref(30)
 const editorFor = ref(null)      // null — закрыт; '' — новая викторина; id — правка
 
-const chosenLabel = computed(() => locale.t(`activity.kind.${chosen.value}`, chosen.value))
+// Пока ничего не выбрано — пусто, а не сырой ключ «activity.kind.» в разметке.
+const chosenLabel = computed(() => (chosen.value ? locale.t(`activity.kind.${chosen.value}`, chosen.value) : ''))
 
 async function choose(kind) {
   chosen.value = kind

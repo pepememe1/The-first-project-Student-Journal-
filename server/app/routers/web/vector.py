@@ -89,6 +89,7 @@ _PARENT_VOICE = (
     ("Предметы за твоей группой пока не закреплены", "Предметы за группой ребёнка пока не закреплены"),
     ("Твои предметы (", "Предметы ребёнка ("),
     ("Твой средний по предметам:", "Средний ребёнка по предметам:"),
+    ("Твои оценки по предметам:", "Оценки ребёнка по предметам:"),
     ("Твой средний балл —", "Средний балл ребёнка —"),
     ("Я могу показать твой средний балл", "Я могу показать средний балл ребёнка"),
     ("Твоя группа —", "Группа ребёнка —"),
@@ -738,6 +739,11 @@ def _known_subjects(user: User, db: Session) -> list:
             #предметы, и без них «оценки Иванова по физике» не опознавали бы предмет.
             for g in user.curated_groups or []:
                 out.update(W.group_subject_list(db, g))
+            #Узнаём и чужие предметы колледжа: «что у меня по математике» у физика иначе
+            #не опознавал предмет и уходил в общую сводку (живой прогон 27.10.2026). Права
+            #это не расширяет — `_teacher_facts` отвечает «не в вашей нагрузке».
+            rows = db.query(Subject.name).filter(Subject.deleted == False).all()  # noqa: E712
+            out.update(r[0] for r in rows if r[0])
             return sorted(out)
         rows = db.query(Subject.name).filter(Subject.deleted == False).all()  # noqa: E712
         return sorted({r[0] for r in rows if r[0]})
@@ -1547,7 +1553,7 @@ def _student_card(db: Session, cfg: dict, stud, intent: str, lessons=None, scale
             "no_voice": True}
 
 
-def _teachers_answer(db: Session, group: str = "") -> dict:
+def _teachers_answer(db: Session, group: str = "", subject: str = "") -> dict:
     """Преподаватели: учётные записи журнала И те, кого называет расписание портала ВСГУТУ.
 
     🔥 До 28.09.2026 Вектор знал только преподавателей с учётной записью — заведённых
@@ -1570,6 +1576,32 @@ def _teachers_answer(db: Session, group: str = "") -> dict:
         sur, first, patr = teacher_match.parse_portal_name(raw)
         initials = "".join(f"{x}." for x in (first, patr) if x)
         return f"{sur} {initials}" if sur and initials else ""
+
+    #«Кто ведёт математику» — только этот предмет, а не стена из всех фамилий колледжа
+    #(живой прогон 27.10.2026). Названия портала сверяем без регистра и по началу:
+    #портал обрезает длинные названия в части ячеек.
+    if subject:
+        want = subject.lower()
+        by_teacher_groups: dict = {}
+        for (g, subj), who in portal.items():
+            s = (subj or "").lower()
+            if (group and g != group) or not (s.startswith(want) or want.startswith(s)):
+                continue
+            for raw in who:
+                name = clean(raw)
+                if name:
+                    by_teacher_groups.setdefault(name, set()).add(g)
+        where = f" в группе {group}" if group else ""
+        if not by_teacher_groups:
+            return {"text": f"По расписанию портала предмет «{subject}»{where} пока никто не ведёт."
+                            + note, "mood": "neutral", "intent": "teachers",
+                    "facts": {"count": 0}, "no_voice": True}
+        #Группа названа в вопросе — повторять её после каждой фамилии незачем.
+        body = "; ".join(t if group else f"{t} — {', '.join(sorted(gs))}"
+                         for t, gs in sorted(by_teacher_groups.items()))
+        return {"text": f"«{subject}»{where} по расписанию портала ведёт: {body.rstrip('.')}.",
+                "mood": "neutral", "intent": "teachers",
+                "facts": {"count": len(by_teacher_groups)}, "no_voice": True}
 
     if group:
         by_teacher: dict = {}
@@ -1642,7 +1674,7 @@ def _admin_facts(msg: str, nlu: dict, db: Session, cfg: dict) -> dict:
         text, facts = _schedule_answer(db, group, msg, day)
         return {"text": text, "mood": "neutral", "intent": "schedule", "facts": facts}
     if intent == "teachers":
-        return _teachers_answer(db, group)
+        return _teachers_answer(db, group, subject)
     if intent == "subjects":
         if group:
             names = W.group_subject_list(db, group)
@@ -1815,7 +1847,7 @@ def _teacher_facts(msg: str, nlu: dict, user: User, db: Session, cfg: dict,
                 "facts": {"groups": len(shown),
                           "count": sum(int(f.get("count") or 0) for _t, f in parts)}}
     if intent == "teachers":
-        return _teachers_answer(db, group)
+        return _teachers_answer(db, group, subject)
     if intent == "groups":
         own = sorted(subjects_by_group)
         parts = []
@@ -2001,7 +2033,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
             return {"text": "Назовите группу — например «расписание К74/1 на завтра».",
                     "mood": "neutral", "intent": "schedule", "facts": {}, "no_voice": True}
         if intent == "teachers":
-            return _teachers_answer(db, nlu["group"])
+            return _teachers_answer(db, nlu["group"], nlu.get("subject") or "")
         return {"text": help_text, "mood": "neutral", "intent": "help", "facts": {}}
 
     # ── СТУДЕНТ: только свои данные (privacy-by-design) ──────────────────────────────
@@ -2031,7 +2063,7 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
         if not group:
             return {"text": "Группа за тобой не закреплена.", "mood": "neutral",
                     "intent": "help", "facts": {}}
-        return _teachers_answer(db, group)
+        return _teachers_answer(db, group, subject)
     if intent == "debtors":
         d = _debts_by_subject(lessons, records, scale_map)
         text = "Задолженностей нет — так держать! 🐯" if not d else \
@@ -2106,8 +2138,18 @@ def _vector_facts(msg: str, user: User, db: Session, cfg: dict, addressee=None) 
         if not graded:
             return {"text": "Оценок по практикам пока нет — как появятся, покажу. 🐯",
                     "mood": "neutral", "intent": "grades", "facts": {}}
-        body = "; ".join(f"{p['subject']} — {p['average']}" for p in graded)
-        return {"text": f"Твой средний по предметам: {body}.", "mood": "neutral",
+        #Сами оценки рядом со средним: на «мои оценки» одни средние читались как отказ
+        #показать оценки (живой прогон 27.10.2026). Выборка та же, что у ответа по одному
+        #предмету выше: практики и ДЗ, «Н» входит; последние восемь, чтобы строка не росла.
+        def marks_of(subj):
+            out = [records.get(l.id) for l in lessons
+                   if l.subject == subj and W.grading.is_practice(l.type)
+                   and (records.get(l.id) == "Н" or W.grading.to_five_point(
+                       records.get(l.id), scale_map.get(l.id, W.grading.DEFAULT_SCALE)) is not None)]
+            return (("…, " if len(out) > 8 else "") + ", ".join(out[-8:])) if out else "—"
+        body = "\n".join(f"• {p['subject']}: средний {p['average']} ({marks_of(p['subject'])})"
+                         for p in graded)
+        return {"text": f"Твои оценки по предметам:\n{body}", "mood": "neutral",
                 "intent": "grades", "facts": {"subjects": len(graded)}}
     if intent == "zet":
         return _zet_facts(db, user.surname, user.name, group, cfg, student_id=user.id)

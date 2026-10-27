@@ -8,7 +8,7 @@ fastapi>=0.110          # веб-фреймворк API
 python-multipart>=0.0.9 # загрузка аудио для голосового ввода (/web/vector/stt)
 uvicorn[standard]>=0.29 # ASGI-сервер для запуска
 SQLAlchemy>=2.0         # ORM (база одна — SQLite, на бою под SQLCipher)
-python-jose[cryptography]>=3.3   # JWT-токены
+PyJWT>=2.10            # JWT-токены (вместо python-jose с 27.10.2026)
 httpx>=0.27             # для тестов (TestClient)
 # 🔥 Три пакета ниже импортируются НАПРЯМУЮ и НА УРОВНЕ МОДУЛЯ, а приезжали
 # транзитивно — как зависимости fastapi. На машине разработчика и на бою всё

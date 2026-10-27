@@ -54,6 +54,12 @@ import re
 #⚠️ Держать синхронной с веткой релиза: по ней автообновление решает, ставить ли сборку.
 APP_VERSION = "Release 4.1.5"
 
+#Выпуски по порядку, последний — APP_VERSION (держит server/tests/test_client_app.py). По этому
+#списку сервер считает, на сколько выпусков отстало приложение, и с MAX_RELEASES_BEHIND
+#просит обновиться обязательно (server/app/client_app.py). Новый выпуск — новая строка.
+RELEASES = ("3.9.9", "4.0", "4.1", "4.1.1", "4.1.2", "4.1.3", "4.1.4", "4.1.5")
+MAX_RELEASES_BEHIND = 5
+
 # Имя каталога с обновлениями внутри `downloads/` (его сервер и так раздаёт наружу).
 UPDATES_DIR_NAME = "updates"
 MANIFEST_NAME = "manifest.json"
@@ -76,6 +82,20 @@ def parse_version(text: str) -> tuple:
     if not m:
         return ()
     return tuple(int(p) for p in m.group(1).split("."))
+
+
+def release_number(text: str = APP_VERSION) -> str:
+    """«Release 4.1.5» → «4.1.5»; так версия едет в заголовке X-Gb-App."""
+    return ".".join(str(p) for p in parse_version(text))
+
+
+def releases_behind(version: str) -> int:
+    """Сколько выпусков из RELEASES новее `version`. Неразобранная версия — 0: не знаем,
+    значит не блокируем (человек без журнала хуже человека на старой сборке)."""
+    mine = parse_version(version)
+    if not mine:
+        return 0
+    return sum(1 for r in RELEASES if parse_version(r) > mine)
 
 
 def is_newer(candidate: str, current: str) -> bool:

@@ -316,11 +316,11 @@ def test_a_deleted_account_is_out_on_the_next_request(client):
 
 
 def test_every_login_gets_its_own_session_token(client):
-    from jose import jwt
+    import jwt
     admin = make_admin(client)
     a = _student(client, admin)
     b = client.post("/auth/login", json={"login": "s1", "password": "studpass1"}, headers=WEB).json()
-    ids = [jwt.get_unverified_claims(t["access_token"]).get("jti") for t in (a, b)]
+    ids = [jwt.decode(t["access_token"], options={"verify_signature": False}).get("jti") for t in (a, b)]
     assert all(ids) and ids[0] != ids[1], ids
     assert a["access_token"] != b["access_token"] and a["refresh_token"] != b["refresh_token"]
 

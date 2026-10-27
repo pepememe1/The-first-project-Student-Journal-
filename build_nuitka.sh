@@ -189,7 +189,7 @@ INC="$INC --include-raw-dir=$ROOT_STAGE=gb_shared"
 # «необязательная» ветка чужой библиотеки становится обязательной ровно тогда, когда
 # основная почему-то не сработала. Экономия в полтора мегабайта здесь стоила трёх
 # сборок по девять минут — и это дешёвая цена только потому, что ошибка громкая.
-VENDOR="sqlalchemy pydantic pydantic_core annotated_types typing_inspection jose \
+VENDOR="sqlalchemy pydantic pydantic_core annotated_types typing_inspection jwt \
         multipart python_multipart webauthn cbor2 pyasn1 pyasn1_modules websockets \
         click ecdsa rsa yaml watchfiles colorama dotenv openpyxl gigachat"
 SITE="$("$PYEXE" -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")"
@@ -405,7 +405,7 @@ PKGS="$PKGS --include-package=email"
 #   watchfiles — uvicorn/supervisors/__init__.py берёт его под try/except ImportError и
 #                только ради --reload; локальный сервер поднимается через uvicorn.Config
 #                без перезагрузки;
-#   ecdsa, rsa — запасные бэкенды python-jose. jose/backends/__init__.py сначала пробует
+#   ecdsa, rsa — запасные бэкенды прежнего python-jose (до 27.10.2026). jose/backends сначала пробовал
 #                cryptography_backend, и он у нас ЕСТЬ (Fernet, SQLCipher, подпись
 #                выпуска) — значит до веток `except ImportError` дело не доходит.
 #

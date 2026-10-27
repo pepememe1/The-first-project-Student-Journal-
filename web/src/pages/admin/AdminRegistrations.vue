@@ -12,6 +12,7 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
 import IconButton from '@/components/ui/IconButton.vue'
+import { copyText } from '@/utils/clipboard'
 
 const locale = useLocaleStore()
 const toast = useToast()
@@ -20,6 +21,12 @@ const rows = ref([])
 const loading = ref(true)
 const busy = ref('')            // id заявки, по которой идёт действие
 const issued = ref(null)       // {email, password} — если письмо не ушло
+
+// Пароль передают руками: переписывать с экрана — верный способ ошибиться (живой прогон 27.10.2026).
+async function copyIssued() {
+  const ok = await copyText(`${issued.value.email}\n${issued.value.password}`)
+  if (ok) toast.success(locale.t('common.copied', 'Скопировано'))
+}
 
 async function reload() {
   loading.value = true
@@ -95,7 +102,8 @@ async function reject(r) {
         <p class="text-xs text-text3">{{ locale.t('adminRegistrations.emailNotSent', 'Письмо не отправлено (почта на сервере не настроена). Передайте студенту эти данные лично:') }}</p>
         <div class="mt-3 space-y-1 rounded-md border border-border2 bg-card2 p-3 text-sm">
           <p>{{ locale.t('adminRegistrations.loginLabel', 'Логин:') }} <b class="text-text">{{ issued.email }}</b></p>
-          <p>{{ locale.t('adminRegistrations.passwordLabel', 'Пароль:') }} <b class="text-accent">{{ issued.password }}</b></p>
+          <p class="flex flex-wrap items-center gap-2">{{ locale.t('adminRegistrations.passwordLabel', 'Пароль:') }} <b class="font-mono text-accent">{{ issued.password }}</b>
+            <IconButton icon="copy" :label="locale.t('adminRegistrations.copyCredentials', 'Скопировать логин и пароль')" @click="copyIssued" /></p>
         </div>
         <AppButton variant="green" size="sm" class="mt-4" @click="issued = null">{{ locale.t('adminRegistrations.done', 'Готово') }}</AppButton>
       </div>

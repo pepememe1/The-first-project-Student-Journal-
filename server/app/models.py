@@ -390,6 +390,9 @@ class AuthSession(Base):
     #(`db._ensure_auth_session_device_columns`), иначе на бою их не будет и вход упадёт
     #на первой же записи сессии.
     user_agent = Column(String, default="")            #браузер/программа при выдаче
+    #Приложение и выпуск из X-Gb-App: «apk 4.1.5» (client_app.label); пусто — сборка
+    #до 4.1.5 не называлась. Колонку досоздаёт тот же ALTER, что и user_agent.
+    app_version = Column(String, default="")
     #Последний запрос по этой сессии. Пишется НЕ на каждый запрос, а не чаще раза в
     #несколько минут (`sessions.touch`): узкое место SQLite — запись.
     last_seen_at = Column(String, default="")

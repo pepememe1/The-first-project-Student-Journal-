@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath, URL } from 'node:url'
+import { readFileSync } from 'node:fs'
 //Плагин лежит отдельным файлом, чтобы его можно было проверить тестом, не
 //поднимая весь Vite (web/tests/stripHtmlComments.test.mjs).
 import stripHtmlComments from './build/stripHtmlComments.js'
@@ -16,8 +17,14 @@ import buildStamp from './build/buildStamp.js'
 const API_TARGET = process.env.VITE_API_TARGET || 'http://localhost:8000'
 const API_PREFIXES = ['/auth', '/me', '/sync', '/admin', '/connect', '/web', '/health', '/docs', '/openapi.json']
 
+// Выпуск продукта — из единственного места, desktop_update.APP_VERSION: по нему сервер
+// узнаёт, на сколько выпусков отстало приложение (utils/appTag.js, server/app/client_app.py).
+const GB_RELEASE = (readFileSync(new URL('../desktop_update.py', import.meta.url), 'utf8')
+  .match(/^APP_VERSION = "Release ([\d.]+)"/m) || [])[1] || ''
+
 export default defineConfig({
   plugins: [vue(), tailwindcss(), stripHtmlComments(), buildStamp()],
+  define: { __GB_RELEASE__: JSON.stringify(GB_RELEASE) },
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },

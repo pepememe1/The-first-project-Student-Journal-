@@ -57,4 +57,4 @@ def test_the_database_is_the_isolated_test_one():
 
 def test_the_jwt_secret_is_the_test_one():
     """Иначе токены, выданные тестами, были бы валидны на бою и наоборот."""
-    assert config.JWT_SECRET == "test-secret-not-for-production"
+    assert config.JWT_SECRET == "test-secret-not-for-production-hs256"

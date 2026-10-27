@@ -628,7 +628,7 @@ def _ensure_auth_session_device_columns():
     except Exception:
         return  #таблицы ещё нет — create_all создаст её сразу со всеми столбцами
     with engine.begin() as conn:
-        for col in ("user_agent", "last_seen_at", "trusted_device_id"):
+        for col in ("user_agent", "last_seen_at", "trusted_device_id", "app_version"):
             if col not in columns:
                 conn.execute(text(f"ALTER TABLE auth_sessions ADD COLUMN {col} VARCHAR DEFAULT ''"))
                 print(f"[db] auth_sessions: добавлена колонка {col}")

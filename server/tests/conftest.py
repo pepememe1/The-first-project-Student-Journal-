@@ -15,7 +15,7 @@ import tempfile
 #Изолированная БД и предсказуемый секрет — строго до импорта приложения.
 _TMP_DB = os.path.join(tempfile.gettempdir(), "gradebook_test.db")
 os.environ["GRADEBOOK_DB_URL"] = "sqlite:///" + _TMP_DB.replace("\\", "/")
-os.environ["GRADEBOOK_JWT_SECRET"] = "test-secret-not-for-production"
+os.environ["GRADEBOOK_JWT_SECRET"] = "test-secret-not-for-production-hs256"
 #⚠️ Ключ шифрования БД гасим ЯВНО (пустой строкой, а не удалением). `app/config.py`
 #дочитывает `server/.env` через `os.environ.setdefault`, то есть занимает любую
 #ОТСУТСТВУЮЩУЮ переменную — и тестовая база начинала открываться боевым ключом из

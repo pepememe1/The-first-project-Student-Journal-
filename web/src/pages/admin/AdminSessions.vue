@@ -10,8 +10,10 @@ import Badge from '@/components/ui/Badge.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { roleLabel } from '@/config/roles'
+import { useConfirm } from '@/composables/useConfirm'
 
 const locale = useLocaleStore()
+const { confirm } = useConfirm()
 const all = ref([])
 const loading = ref(true)
 const showRefresh = ref(false)
@@ -24,8 +26,14 @@ async function load() {
 }
 onMounted(load)
 
-async function revoke(jti) {
-  try { await adminApi.revoke({ jti }); await load() } catch { /* */ }
+// Отзыв выкидывает человека посреди работы — сначала спрашиваем (живой прогон 27.10.2026).
+async function revoke(row) {
+  const ok = await confirm({
+    title: locale.t('adminSessions.revokeConfirm', { login: row.login }),
+    okText: locale.t('adminSessions.revoke', 'Отозвать'), danger: true,
+  })
+  if (!ok) return
+  try { await adminApi.revoke({ jti: row.jti }); await load() } catch { /* */ }
 }
 
 // Человекочитаемая длительность: минуты / часы / дни.
@@ -39,6 +47,7 @@ function dur(sec) {
 const columns = computed(() => [
   { key: 'login', label: locale.t('adminSessions.user', 'Пользователь') },
   { key: 'role', label: locale.t('adminSessions.role', 'Роль') },
+  { key: 'app', label: locale.t('adminSessions.app', 'Приложение') },
   { key: 'kind', label: locale.t('adminSessions.kind', 'Тип') },
   { key: 'ip', label: 'IP' },
   { key: 'expires_in_sec', label: locale.t('adminSessions.remaining', 'Осталось'), align: 'right' },
@@ -64,10 +73,11 @@ const columns = computed(() => [
     <DataTable :columns="columns" :rows="rows" :loading="loading" :empty="locale.t('adminSessions.noSessions', 'Активных сессий нет')">
       <template #cell-login="{ row }"><span class="font-medium text-text">{{ row.login }}</span></template>
       <template #cell-role="{ row }"><Badge variant="muted">{{ roleLabel(row.role) }}</Badge></template>
+      <template #cell-app="{ row }"><span class="whitespace-nowrap font-mono text-xs text-text2">{{ row.app || '—' }}</span></template>
       <template #cell-kind="{ row }"><Badge :variant="row.kind === 'refresh' ? 'blue' : 'green'">{{ row.kind === 'refresh' ? locale.t('adminSessions.kindRefresh', 'refresh') : locale.t('adminSessions.kindAccess', 'access') }}</Badge></template>
       <template #cell-expires_in_sec="{ row }">{{ dur(row.expires_in_sec) }}</template>
       <template #cell-actions="{ row }">
-        <AppButton variant="red" size="sm" @click="revoke(row.jti)">{{ locale.t('adminSessions.revoke', 'Отозвать') }}</AppButton>
+        <AppButton variant="red" size="sm" @click="revoke(row)">{{ locale.t('adminSessions.revoke', 'Отозвать') }}</AppButton>
       </template>
     </DataTable>
   </div>

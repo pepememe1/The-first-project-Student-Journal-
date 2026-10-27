@@ -21,6 +21,7 @@ export default [
         //Подставляется Vite на сборке (build/buildStamp.js). Для линтера это обычный
         //глобал: объявить надо, иначе `no-undef` ругается на живой и рабочий код.
         __BUILD_STAMP__: 'readonly',
+        __GB_RELEASE__: 'readonly',
       },
     },
     rules: {
