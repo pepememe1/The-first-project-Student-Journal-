@@ -48,6 +48,11 @@ export const authApi = {
   //потому, что не может войти.
   recoverConfirm: (token, password, code = '') =>
     api.post('/auth/recover/confirm', { token, password, code }),
+  // Восстановление КОДОМ из письма (27.10.2026): кнопка «Забыли пароль?» после двух
+  // неудачных попыток входа. Верный код даёт одноразовый ключ, а пароль меняет
+  // `recoverConfirm` выше — та же дверь, что у ссылки из письма.
+  recoverCodeStart: (login, email) => api.post('/auth/recover/code/start', { login, email }),
+  recoverCodeVerify: (login, code) => api.post('/auth/recover/code/verify', { login, code }),
   // Passkeys (вход по Face ID / отпечатку). begin выдаёт опции с challenge, complete
   // проверяет ответ устройства. register — под токеном (включить), login — публичный.
   // ── Второй фактор входа (TOTP) ──
@@ -1038,6 +1043,13 @@ export const accountApi = {
   saveExtra: (login, adminEmail, adminPhone) =>
     api.post('/web/accounts/extra', { login, admin_email: adminEmail, admin_phone: adminPhone }),
   resetCredential: (login) => api.post('/web/accounts/credential/reset', { login }),
+  // Первичная настройка после входа по выданному паролю (27.10.2026): почта колледжа →
+  // код из письма (`emailConfirm`) → новый пароль дважды. Текущий пароль не спрашивается:
+  // он выданный и напечатан на листе группы (см. `password_recovery.require_onboarding`).
+  onboarding: () => api.get('/me/onboarding'),
+  onboardingEmail: (email) => api.post('/me/onboarding/email', { email }),
+  onboardingPassword: (next, confirm, code = '') =>
+    api.post('/me/onboarding/password', { new: next, confirm, code }),
   rolloutGroups: () => api.get('/web/accounts/rollout/groups'),
   rolloutStudents: (group) => api.get('/web/accounts/rollout/students', { params: { group } }),
   // Документ .xlsx. POST, а не GET: список отмеченных студентов длинный, и в адрес

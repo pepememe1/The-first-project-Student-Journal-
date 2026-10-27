@@ -40,7 +40,7 @@ import GifPicker from '@/components/messenger/GifPicker.vue'
 import ReportUserDialog from '@/components/messenger/ReportUserDialog.vue'
 import StampEgg from '@/components/easter/StampEgg.vue'
 import { useToast } from '@/composables/useToast'
-import { gifPosterSrc, gifVideoSrc, mediaSrc, playMuted } from '@/utils/mediaSrc'
+import { gifPosterSrc, gifStillSrc, gifVideoSrc, mediaSrc, playMuted } from '@/utils/mediaSrc'
 import GbIcon from '@/components/ui/GbIcon.vue'
 
 const props = defineProps({
@@ -144,7 +144,19 @@ const bannerUrl = computed(() => shown.value.profile_banner || '')
 //Гифка-баннер — роликом MP4 с первым кадром сразу, как аватарка (utils/mediaSrc.js).
 const bannerVideo = computed(() => gifVideoSrc(bannerUrl.value))
 const bannerVideoFailed = ref(false)
-watch(bannerUrl, () => { bannerVideoFailed.value = false })
+//Первый кадр — подложка, как у аватарки (`Avatar.vue`, 27.10.2026): Klipy недоступен —
+//на баннере остаётся кадр гифки; не открылся и кадр — цвет профиля, а не пустая полоса.
+const bannerStill = computed(() => gifStillSrc(bannerUrl.value))
+const bannerStillFailed = ref(false)
+const bannerGifFailed = ref(false)
+const bannerShown = computed(() => !!bannerUrl.value && (
+  (!!bannerStill.value && !bannerStillFailed.value)
+  || (!!bannerVideo.value && !bannerVideoFailed.value) || !bannerGifFailed.value))
+watch(bannerUrl, () => {
+  bannerVideoFailed.value = false
+  bannerStillFailed.value = false
+  bannerGifFailed.value = false
+})
 
 // Фуллскрин-просмотр аватарки/баннера ЧУЖОГО профиля по клику (Влад): полноценный файл
 // без круглой/квадратной обрезки. '' — закрыт. В своём (editable) профиле клик по картинке
@@ -416,15 +428,18 @@ async function sendMessage() {
          ⚠️ На ЧУЖОМ профиле поведение прежнее — лупа во весь экран: там менять нечего. -->
     <div class="relative h-40 shrink-0 overflow-hidden sm:h-52"
          :class="editable ? 'cursor-pointer' : ''"
-         :style="bannerUrl ? undefined : { background: plate }"
+         :style="bannerShown ? undefined : { background: plate }"
          @click="editable && (gifPickerFor = 'banner')">
+      <img v-if="bannerStill && !bannerStillFailed" :src="bannerStill" alt="" decoding="async"
+           class="absolute inset-0 size-full object-cover" :class="{ 'cursor-zoom-in': !editable }"
+           @error="bannerStillFailed = true" @click="!editable && (lightbox = bannerUrl)" />
       <video v-if="bannerVideo && !bannerVideoFailed" :src="bannerVideo" :poster="gifPosterSrc(bannerUrl)"
              autoplay muted loop playsinline disablepictureinpicture aria-hidden="true"
-             class="size-full object-cover" :class="{ 'cursor-zoom-in': !editable }"
+             class="relative size-full object-cover" :class="{ 'cursor-zoom-in': !editable }"
              @canplay="playMuted" @error="bannerVideoFailed = true" @click="!editable && (lightbox = bannerUrl)" />
-      <img v-else-if="bannerUrl" :src="mediaSrc(bannerUrl)" alt="" class="size-full object-cover"
+      <img v-else-if="bannerUrl && !bannerGifFailed" :src="mediaSrc(bannerUrl)" alt="" class="relative size-full object-cover"
            :class="{ 'cursor-zoom-in': !editable }"
-           @click="!editable && (lightbox = bannerUrl)" />
+           @error="bannerGifFailed = true" @click="!editable && (lightbox = bannerUrl)" />
       <!-- Карандаш виден ВСЕГДА, а не только при наведении: на телефоне наведения не
            существует вовсе, и подсказка «здесь можно поменять» иначе не появилась бы
            никогда. При наведении просто становится заметнее. -->

@@ -34,6 +34,7 @@ import { shellBadgeTickDue } from '@/utils/livePolling'
 import { useLocaleStore } from '@/stores/locale'
 import { useMaintenanceStore } from '@/stores/maintenance'
 import GbIcon from '@/components/ui/GbIcon.vue'
+import AccountOnboardingDialog from '@/components/account/AccountOnboardingDialog.vue'
 
 const locale = useLocaleStore()
 //Переход «к содержимому»: фокус на <main>, а не только прокрутка — иначе следующий Tab
@@ -489,6 +490,11 @@ onMounted(askLoginEggs)
          действию — запуску активности. -->
     <!-- Окно «время вышло» — на ЛЮБОЙ вкладке: таймер ставят и идут работать. -->
     <TimerAlarm />
+
+    <!-- Первичная настройка учётки студента (27.10.2026): вошёл по паролю из листа
+         группы — сразу просим привязать почту и придумать свой пароль. Само окно
+         спрашивает сервер, нужна ли настройка, и молчит у всех остальных. -->
+    <AccountOnboardingDialog v-if="!embed && auth.role === 'student'" />
 
     <!-- Втулка колеса открывает ТОТ ЖЕ журнал, что и ссылка внутри активности
          (ActivityShell): раньше здесь висела вторая, урезанная его версия — строка с одним

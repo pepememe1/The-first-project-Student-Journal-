@@ -20,6 +20,7 @@ import { onBeforeRouteLeave } from 'vue-router'
 import { RotateCw, User, Users } from '@lucide/vue'
 import { adminApi, scheduleApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
+import EditorShell from '@/components/ui/EditorShell.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocaleStore } from '@/stores/locale'
@@ -769,69 +770,69 @@ function isHover(day, slot) {
     </div>
 
     <!-- Форма пары -->
-    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminSchedule.pairFormTitle', { group, week: weekLabel(week) }) }}</h3>
-        <div class="grid grid-cols-2 gap-3">
-          <label class="text-sm">{{ locale.t('adminSchedule.formDay', 'День') }}
-            <select v-model="form.day" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option v-for="d in DAYS" :key="d" :value="d">{{ dayLabel(d) }}</option>
-            </select>
-          </label>
-          <label class="text-sm">{{ locale.t('adminSchedule.formSlotNumber', '№ пары') }}
-            <select v-model.number="form.slot" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option v-for="s in slots" :key="s" :value="s">{{ s }} ({{ timeForSlot(s) }})</option>
-            </select>
-          </label>
-          <label class="col-span-2 text-sm">{{ locale.t('adminSchedule.formSubject', 'Предмет') }}
-            <select v-model="form.subject" @change="onFormSubjectChange"
-                    class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option value="" disabled>{{ locale.t('adminSchedule.selectSubject', 'Выберите предмет') }}</option>
-              <option v-for="s in groupSubjects" :key="s" :value="s">{{ s }}</option>
-            </select>
-            <p v-if="!groupSubjects.length" class="mt-1 text-tiny text-text3">
-              {{ locale.t('adminSchedule.noSubjectsHint', 'У группы нет предметов — задайте их во вкладке «Группы».') }}
-            </p>
-          </label>
-          <!-- Время подставляется по номеру пары, но правится руками: у замен и
-               консультаций оно регулярно не совпадает с сеткой звонков. -->
-          <label class="text-sm">{{ locale.t('adminSchedule.formTime', 'Время') }}
-            <input v-model="form.time" :placeholder="timeForSlot(form.slot)"
-                   class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
-          </label>
-          <!-- Подгруппа: та же нумерация, что у занятий журнала (0 — вся группа). -->
-          <label class="text-sm">{{ locale.t('adminSchedule.formSubgroup', 'Подгруппа') }}
-            <select v-model.number="form.subgroup"
-                    class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option :value="0">{{ locale.t('adminSchedule.subgroupJoint', 'Вся группа') }}</option>
-              <option :value="1">{{ locale.t('adminSchedule.subgroup1', '1 подгруппа') }}</option>
-              <option :value="2">{{ locale.t('adminSchedule.subgroup2', '2 подгруппа') }}</option>
-            </select>
-          </label>
-          <label class="text-sm">{{ locale.t('adminSchedule.formRoom', 'Аудитория') }}
-            <input v-model="form.room" placeholder="101" list="gb-free-rooms" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
-            <datalist id="gb-free-rooms">
-              <option v-for="r in freeRooms" :key="r" :value="r" />
-            </datalist>
-            <span v-if="freeRooms.length" class="mt-1 block text-tiny text-text3">
-              {{ locale.t('adminSchedule.freeRooms', { n: freeRooms.length }) }}{{ freeRoomsPartial ? ' · ' + locale.t('adminSchedule.checkIncomplete', 'Проверка неполна: расписание портала ещё собирается') : '' }}
-            </span>
-          </label>
-          <!-- §ролей: преподаватель — ставится АВТОМАТОМ из назначения (не ручной ввод),
-               см. onFormSubjectChange / webdata.teacher_assignments. -->
-          <label class="text-sm">{{ locale.t('adminSchedule.formTeacher', 'Преподаватель') }}
-            <input :value="form.teacher || locale.t('adminSchedule.notAssigned', '— не назначен —')" disabled
-                   class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2/60 px-2 text-sm text-text3 outline-none" />
-          </label>
-        </div>
-        <div class="mt-5 flex items-center justify-between">
-          <button v-if="form.origin" class="text-sm text-red hover:underline" @click="hideFromForm">{{ locale.t('adminSchedule.hidePair', 'Скрыть пару') }}</button>
-          <div class="ml-auto flex gap-2">
-            <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
-            <AppButton variant="green" size="sm" @click="submitForm">{{ locale.t('adminSchedule.addToDraft', 'В черновик') }}</AppButton>
-          </div>
+    <EditorShell v-if="showForm" :title="locale.t('adminSchedule.pairFormTitle', { group, week: weekLabel(week) })" icon="calendar"
+                 @close="showForm = false">
+      <div class="grid grid-cols-2 gap-3">
+        <label class="text-sm">{{ locale.t('adminSchedule.formDay', 'День') }}
+          <select v-model="form.day" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+            <option v-for="d in DAYS" :key="d" :value="d">{{ dayLabel(d) }}</option>
+          </select>
+        </label>
+        <label class="text-sm">{{ locale.t('adminSchedule.formSlotNumber', '№ пары') }}
+          <select v-model.number="form.slot" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+            <option v-for="s in slots" :key="s" :value="s">{{ s }} ({{ timeForSlot(s) }})</option>
+          </select>
+        </label>
+        <label class="col-span-2 text-sm">{{ locale.t('adminSchedule.formSubject', 'Предмет') }}
+          <select v-model="form.subject" @change="onFormSubjectChange"
+                  class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+            <option value="" disabled>{{ locale.t('adminSchedule.selectSubject', 'Выберите предмет') }}</option>
+            <option v-for="s in groupSubjects" :key="s" :value="s">{{ s }}</option>
+          </select>
+          <p v-if="!groupSubjects.length" class="mt-1 text-tiny text-text3">
+            {{ locale.t('adminSchedule.noSubjectsHint', 'У группы нет предметов — задайте их во вкладке «Группы».') }}
+          </p>
+        </label>
+        <!-- Время подставляется по номеру пары, но правится руками: у замен и
+             консультаций оно регулярно не совпадает с сеткой звонков. -->
+        <label class="text-sm">{{ locale.t('adminSchedule.formTime', 'Время') }}
+          <input v-model="form.time" :placeholder="timeForSlot(form.slot)"
+                 class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+        </label>
+        <!-- Подгруппа: та же нумерация, что у занятий журнала (0 — вся группа). -->
+        <label class="text-sm">{{ locale.t('adminSchedule.formSubgroup', 'Подгруппа') }}
+          <select v-model.number="form.subgroup"
+                  class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+            <option :value="0">{{ locale.t('adminSchedule.subgroupJoint', 'Вся группа') }}</option>
+            <option :value="1">{{ locale.t('adminSchedule.subgroup1', '1 подгруппа') }}</option>
+            <option :value="2">{{ locale.t('adminSchedule.subgroup2', '2 подгруппа') }}</option>
+          </select>
+        </label>
+        <label class="text-sm">{{ locale.t('adminSchedule.formRoom', 'Аудитория') }}
+          <input v-model="form.room" placeholder="101" list="gb-free-rooms" class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent" />
+          <datalist id="gb-free-rooms">
+            <option v-for="r in freeRooms" :key="r" :value="r" />
+          </datalist>
+          <span v-if="freeRooms.length" class="mt-1 block text-tiny text-text3">
+            {{ locale.t('adminSchedule.freeRooms', { n: freeRooms.length }) }}{{ freeRoomsPartial ? ' · ' + locale.t('adminSchedule.checkIncomplete', 'Проверка неполна: расписание портала ещё собирается') : '' }}
+          </span>
+        </label>
+        <!-- §ролей: преподаватель — ставится АВТОМАТОМ из назначения (не ручной ввод),
+             см. onFormSubjectChange / webdata.teacher_assignments. -->
+        <label class="text-sm">{{ locale.t('adminSchedule.formTeacher', 'Преподаватель') }}
+          <input :value="form.teacher || locale.t('adminSchedule.notAssigned', '— не назначен —')" disabled
+                 class="mt-1 h-9 w-full rounded-sm border border-border2 bg-card2/60 px-2 text-sm text-text3 outline-none" />
+        </label>
+      </div>
+      <template #footer>
+      <div class="w-full flex items-center justify-between">
+        <button v-if="form.origin" class="text-sm text-red hover:underline" @click="hideFromForm">{{ locale.t('adminSchedule.hidePair', 'Скрыть пару') }}</button>
+        <div class="ml-auto flex gap-2">
+          <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
+          <AppButton variant="green" size="sm" @click="submitForm">{{ locale.t('adminSchedule.addToDraft', 'В черновик') }}</AppButton>
         </div>
       </div>
-    </div>
+      </template>
+    </EditorShell>
   </div>
 </template>

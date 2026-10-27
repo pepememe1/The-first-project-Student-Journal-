@@ -10,6 +10,7 @@ import { adminApi, scheduleApi } from '@/api/endpoints'
 import { generatePassword } from '@/utils/passwordGen'
 import { copyText } from '@/utils/clipboard'
 import AppButton from '@/components/ui/AppButton.vue'
+import EditorShell from '@/components/ui/EditorShell.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
@@ -476,102 +477,100 @@ async function del(r) {
     </div>
 
     <!-- Модалка создания/правки -->
-    <div v-dialog v-if="showForm" data-dialog-guard="self" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="closeForm">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminStudents.editTitle', 'Изменить студента') : locale.t('adminStudents.addTitle', 'Добавить студента') }}</h3>
-        <div ref="formBox" class="-mx-1 space-y-3 px-1" :class="lockedHeight ? 'overflow-y-auto' : ''"
-             :style="lockedHeight ? { height: lockedHeight + 'px' } : null">
-          <div class="grid grid-cols-2 gap-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.surname', 'Фамилия') }}</span>
-              <input v-model="form.surname" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.firstName', 'Имя') }}</span>
-              <input v-model="form.name" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-          </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.patronymic', 'Отчество') }} <span class="text-text3 normal-case">{{ locale.t('adminStudents.optionalHint', '(необязательно)') }}</span></span>
-            <input v-model="form.patronymic" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-          <!-- День рождения БЕЗ ГОДА: для поздравления он не нужен, а полная дата
-               рождения — совсем другой уровень чувствительности. Сервер год отбрасывает
-               молча, даже если его вписали. -->
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.birthday', 'День рождения') }}
-            <span class="text-text3 normal-case">{{ locale.t('adminStudents.birthdayHint', '(день и месяц, например 07.03)') }}</span></span>
-            <input v-model="form.birthday" inputmode="numeric" placeholder="07.03" maxlength="10"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colLogin', 'Логин') }}</span>
-            <input v-model="form.login" :disabled="!!editing" maxlength="64"
-                   autocapitalize="none" autocorrect="off" spellcheck="false"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" /></label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colGroup', 'Группа') }}</span>
-            <input v-model="form.group" list="admin-group-list" maxlength="40" :placeholder="locale.t('adminStudents.groupPlaceholder', 'Выберите или введите группу')"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
-            <!-- label у option в datalist показывается второй строкой рядом со значением
-                 (Chromium: и браузер, и WebView2 на десктопе, и WebView в APK) — так
-                 направление видно, а само значение остаётся чистым именем группы. -->
-            <datalist id="admin-group-list">
-              <option v-for="g in formGroupChoices" :key="g" :value="g" :label="formGroupLabel(g) || undefined" />
-            </datalist>
-            <span class="mt-1 block text-tiny text-text3">{{ categoryFilter
-              ? locale.t('adminStudents.groupsOfCategoryHint', { category: categoryLabel(categoryFilter) })
-              : locale.t('adminStudents.groupsAllCategoriesHint', 'Показаны группы всех направлений — направление подписано рядом.') }}</span>
-          </label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? locale.t('adminStudents.newPasswordHint', 'Новый пароль (пусто — не менять)') : locale.t('adminStudents.passwordLabel', 'Пароль') }}</span>
-            <!-- Сам пароль показать нельзя (в базе необратимый хеш), но ДАТА выдачи
-                 отвечает на реальный вопрос админа: свежий пароль или полугодовой. -->
-            <p v-if="editing" class="mb-1 text-tiny text-text3">
-              <span class="uppercase">{{ locale.t('password.issuedLabel', 'Пароль выдан:') }}</span>
-              <span class="ml-1 text-text2">{{ fmtIssued(passwordSetAt) || locale.t('password.issuedUnknown', 'неизвестно') }}</span>
-              <span v-if="form.password" class="ml-1 text-accent">{{ locale.t('password.issuedPending', '→ обновится при сохранении') }}</span>
-            </p>
-            <div class="flex gap-2">
-              <div class="relative flex-1">
-                <!-- Подсказка СЛОВАМИ, а не «••••••••»: точки в пустом поле читались как уже
-                     заполненный пароль (живой прогон 01.10.2026). -->
-                <input v-model="form.password" :type="showPass ? 'text' : 'password'"
-                       :placeholder="editing ? locale.t('adminStudents.passwordKeepPlaceholder', 'не менять') : locale.t('adminStudents.passwordNewPlaceholder', 'введите или нажмите ↻')"
-                       class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
-                <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent"
-                        :aria-label="showPass ? locale.t('login.hide', 'Скрыть') : locale.t('login.show', 'Показать')" @click="showPass = !showPass">
-                  <GbIcon :name="showPass ? 'hide' : 'show'" class="size-4" />
-                </button>
-              </div>
-              <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
-                      :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
-                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
-                      @click="regeneratePassword">
-                <RotateCw class="size-4" />
-              </button>
-              <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
-              <button type="button" :disabled="!form.password"
-                      :title="locale.t('password.copy', 'Скопировать пароль')"
-                      :aria-label="locale.t('password.copy', 'Скопировать пароль')"
-                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
-                      @click="copyPassword">
-                <Copy class="size-4" />
+    <EditorShell v-if="showForm" data-dialog-guard="self" :title="editing ? locale.t('adminStudents.editTitle', 'Изменить студента') : locale.t('adminStudents.addTitle', 'Добавить студента')" :icon="editing ? 'edit' : 'add'"
+                 @close="closeForm">
+      <div ref="formBox" class="-mx-1 space-y-3 px-1" :class="lockedHeight ? 'overflow-y-auto' : ''"
+           :style="lockedHeight ? { height: lockedHeight + 'px' } : null">
+        <div class="grid grid-cols-2 gap-3">
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.surname', 'Фамилия') }}</span>
+            <input v-model="form.surname" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.firstName', 'Имя') }}</span>
+            <input v-model="form.name" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+        </div>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.patronymic', 'Отчество') }} <span class="text-text3 normal-case">{{ locale.t('adminStudents.optionalHint', '(необязательно)') }}</span></span>
+          <input v-model="form.patronymic" maxlength="60" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+        <!-- День рождения БЕЗ ГОДА: для поздравления он не нужен, а полная дата
+             рождения — совсем другой уровень чувствительности. Сервер год отбрасывает
+             молча, даже если его вписали. -->
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.birthday', 'День рождения') }}
+          <span class="text-text3 normal-case">{{ locale.t('adminStudents.birthdayHint', '(день и месяц, например 07.03)') }}</span></span>
+          <input v-model="form.birthday" inputmode="numeric" placeholder="07.03" maxlength="10"
+                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colLogin', 'Логин') }}</span>
+          <input v-model="form.login" :disabled="!!editing" maxlength="64"
+                 autocapitalize="none" autocorrect="off" spellcheck="false"
+                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" /></label>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminStudents.colGroup', 'Группа') }}</span>
+          <input v-model="form.group" list="admin-group-list" maxlength="40" :placeholder="locale.t('adminStudents.groupPlaceholder', 'Выберите или введите группу')"
+                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+          <!-- label у option в datalist показывается второй строкой рядом со значением
+               (Chromium: и браузер, и WebView2 на десктопе, и WebView в APK) — так
+               направление видно, а само значение остаётся чистым именем группы. -->
+          <datalist id="admin-group-list">
+            <option v-for="g in formGroupChoices" :key="g" :value="g" :label="formGroupLabel(g) || undefined" />
+          </datalist>
+          <span class="mt-1 block text-tiny text-text3">{{ categoryFilter
+            ? locale.t('adminStudents.groupsOfCategoryHint', { category: categoryLabel(categoryFilter) })
+            : locale.t('adminStudents.groupsAllCategoriesHint', 'Показаны группы всех направлений — направление подписано рядом.') }}</span>
+        </label>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? locale.t('adminStudents.newPasswordHint', 'Новый пароль (пусто — не менять)') : locale.t('adminStudents.passwordLabel', 'Пароль') }}</span>
+          <!-- Сам пароль показать нельзя (в базе необратимый хеш), но ДАТА выдачи
+               отвечает на реальный вопрос админа: свежий пароль или полугодовой. -->
+          <p v-if="editing" class="mb-1 text-tiny text-text3">
+            <span class="uppercase">{{ locale.t('password.issuedLabel', 'Пароль выдан:') }}</span>
+            <span class="ml-1 text-text2">{{ fmtIssued(passwordSetAt) || locale.t('password.issuedUnknown', 'неизвестно') }}</span>
+            <span v-if="form.password" class="ml-1 text-accent">{{ locale.t('password.issuedPending', '→ обновится при сохранении') }}</span>
+          </p>
+          <div class="flex gap-2">
+            <div class="relative flex-1">
+              <!-- Подсказка СЛОВАМИ, а не «••••••••»: точки в пустом поле читались как уже
+                   заполненный пароль (живой прогон 01.10.2026). -->
+              <input v-model="form.password" :type="showPass ? 'text' : 'password'"
+                     :placeholder="editing ? locale.t('adminStudents.passwordKeepPlaceholder', 'не менять') : locale.t('adminStudents.passwordNewPlaceholder', 'введите или нажмите ↻')"
+                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
+              <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent"
+                      :aria-label="showPass ? locale.t('login.hide', 'Скрыть') : locale.t('login.show', 'Показать')" @click="showPass = !showPass">
+                <GbIcon :name="showPass ? 'hide' : 'show'" class="size-4" />
               </button>
             </div>
-            <span class="mt-1 block text-tiny text-text3">{{ editing
-              ? locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.')
-              : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span>
-            <!-- Пустой пароль при создании — не ошибка (его выдают потом листом на группу),
-                 но сказать об этом надо: иначе студент «заведён», а войти не может. -->
-            <span v-if="!editing && !form.password" class="mt-1 block text-tiny text-orange">{{ locale.t('adminStudents.noPasswordHint', 'Без пароля студент войти не сможет. Пароль можно выдать позже — кнопкой «Логины и пароли группы».') }}</span></label>
-          <!-- «Доп. данные» (4.0): стартовый пароль и сверка контактов. Раскрываются
-               ВНУТРИ этой же прокрутки — окно не растёт. -->
-          <div v-if="showExtra" ref="extraAnchor" class="border-t border-border pt-3">
-            <AccountExtraPanel ref="extraRef" :login="editingSid ? '' : (editing || '')" :is-admin="true" />
+            <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
+                    :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
+                    @click="regeneratePassword">
+              <RotateCw class="size-4" />
+            </button>
+            <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
+            <button type="button" :disabled="!form.password"
+                    :title="locale.t('password.copy', 'Скопировать пароль')"
+                    :aria-label="locale.t('password.copy', 'Скопировать пароль')"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
+                    @click="copyPassword">
+              <Copy class="size-4" />
+            </button>
           </div>
-          <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
+          <span class="mt-1 block text-tiny text-text3">{{ editing
+            ? locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.')
+            : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span>
+          <!-- Пустой пароль при создании — не ошибка (его выдают потом листом на группу),
+               но сказать об этом надо: иначе студент «заведён», а войти не может. -->
+          <span v-if="!editing && !form.password" class="mt-1 block text-tiny text-orange">{{ locale.t('adminStudents.noPasswordHint', 'Без пароля студент войти не сможет. Пароль можно выдать позже — кнопкой «Логины и пароли группы».') }}</span></label>
+        <!-- «Доп. данные» (4.0): стартовый пароль и сверка контактов. Раскрываются
+             ВНУТРИ этой же прокрутки — окно не растёт. -->
+        <div v-if="showExtra" ref="extraAnchor" class="border-t border-border pt-3">
+          <AccountExtraPanel ref="extraRef" :login="editingSid ? '' : (editing || '')" :is-admin="true" />
         </div>
-        <!-- Еле заметная кнопка: данные нужны редко, а видеть их на каждом открытии
-             редактора — шум поверх ФИО и группы. -->
-        <button type="button" class="mt-3 text-xs text-text3 opacity-50 transition-opacity hover:opacity-100"
-                @click="toggleExtra">{{ showExtra ? locale.t('extra.hide', 'скрыть доп. данные') : locale.t('extra.show', 'доп. данные') }}</button>
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
-          <AppButton variant="green" size="sm" :disabled="saving" @click="save">
-            {{ saving ? locale.t('adminStudents.saving', 'Сохранение…') : (editing ? locale.t('common.save') : locale.t('adminStudents.addAction2', 'Добавить')) }}
-          </AppButton>
-        </div>
+        <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
       </div>
-    </div>
+      <!-- Еле заметная кнопка: данные нужны редко, а видеть их на каждом открытии
+           редактора — шум поверх ФИО и группы. -->
+      <button type="button" class="mt-3 text-xs text-text3 opacity-50 transition-opacity hover:opacity-100"
+              @click="toggleExtra">{{ showExtra ? locale.t('extra.hide', 'скрыть доп. данные') : locale.t('extra.show', 'доп. данные') }}</button>
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
+        <AppButton variant="green" size="sm" :disabled="saving" @click="save">
+          {{ saving ? locale.t('adminStudents.saving', 'Сохранение…') : (editing ? locale.t('common.save') : locale.t('adminStudents.addAction2', 'Добавить')) }}
+        </AppButton>
+      </template>
+    </EditorShell>
   </div>
 </template>

@@ -9,7 +9,9 @@ import { useLocaleStore } from '@/stores/locale'
 import { profilePlate } from '@/theme/palette'
 import Avatar from '@/components/ui/Avatar.vue'
 
-defineProps({ count: { type: Number, default: 1 } })
+//`title` — то же окно для «Поделиться» картинкой (ImageViewerDialog.vue, 27.10.2026):
+//выбор чатов один, отличается только подпись.
+defineProps({ count: { type: Number, default: 1 }, title: { type: String, default: '' } })
 const emit = defineEmits(['submit', 'close'])
 
 const m = useMessengerStore()
@@ -36,7 +38,7 @@ function initials(name) {
        @click.self="emit('close')">
     <div class="flex max-h-[80vh] w-full max-w-sm flex-col rounded-xl border border-border2 bg-card shadow-card">
       <div class="flex items-center justify-between border-b border-border p-4">
-        <h3 class="font-title text-lg font-bold text-text">{{ locale.t('forward.title', 'Переслать') }} {{ count > 1 ? `(${count})` : '' }}</h3>
+        <h3 class="font-title text-lg font-bold text-text">{{ title || locale.t('forward.title', 'Переслать') }} {{ count > 1 ? `(${count})` : '' }}</h3>
         <button type="button" @click="emit('close')" :aria-label="locale.t('common.close')"
                 class="grid size-8 place-items-center rounded-md text-text3 hover:bg-bg2 hover:text-text">
           <X class="size-5" />
@@ -68,7 +70,7 @@ function initials(name) {
                 class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
         <button type="button" :disabled="!chosen.length" @click="emit('submit', chosen)"
                 class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent2 disabled:opacity-50">
-          {{ locale.t('forward.title', 'Переслать') }}
+          {{ title || locale.t('forward.title', 'Переслать') }}
         </button>
       </div>
     </div>

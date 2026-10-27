@@ -16,8 +16,11 @@ import { accountApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
+import { useAuthStore } from '@/stores/auth'
+import { saveCredential } from '@/utils/credentialStore'
 
 const loc = useLocaleStore()
+const auth = useAuthStore()
 const toast = useToast()
 const current = ref('')
 const next = ref('')
@@ -39,6 +42,9 @@ async function save() {
   error.value = ''
   try {
     await accountApi.changePassword(current.value, next.value, code.value)
+    //Браузер предлагает запомнить НОВЫЙ пароль — иначе в связке остался бы прежний, и
+    //следующий вход автозаполнением упёрся бы в «неверный пароль».
+    await saveCredential(auth.user?.login, next.value)
     current.value = next.value = repeat.value = code.value = ''
     needCode.value = false
     toast.success(loc.t('account.passwordChanged', 'Пароль изменён'))

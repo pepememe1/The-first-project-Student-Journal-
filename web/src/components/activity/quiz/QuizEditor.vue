@@ -11,6 +11,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { X, Plus, Trash2, Copy } from '@lucide/vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import EditorShell from '@/components/ui/EditorShell.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { activitiesApi } from '@/api/endpoints'
 import GbIcon from '@/components/ui/GbIcon.vue'
@@ -119,19 +120,13 @@ async function copySelf() {
 </script>
 
 <template>
-  <div v-back-close class="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-3"
-       @click.self="emit('close')">
-    <div class="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border2 bg-card shadow-xl">
-      <div class="flex items-center gap-2 border-b border-border2 px-4 py-3">
-        <h2 class="min-w-0 flex-1 truncate text-base font-semibold text-text">
-          {{ quizId ? locale.t('quiz.edit', 'Правка викторины') : locale.t('quiz.create', 'Новая викторина') }}
-        </h2>
-        <button :aria-label="locale.t('common.close', 'Закрыть')" type="button" @click="emit('close')" class="rounded-lg p-1 text-text3 hover:text-accent">
-          <X class="size-5" />
-        </button>
-      </div>
-
-      <div class="min-h-0 flex-1 overflow-y-auto p-4">
+  <!-- Каркас — общий для редакторов (`EditorShell.vue`, 27.10.2026): шапка и кнопки
+       закреплены, вопросы прокручиваются между ними. Поверх окна активности — z-[75]. -->
+  <EditorShell class="!z-[75]" size="xl" :icon="quizId ? 'edit' : 'add'"
+               :title="quizId ? locale.t('quiz.edit', 'Правка викторины') : locale.t('quiz.create', 'Новая викторина')"
+               :subtitle="locale.t('quiz.editorHint', 'Вопросы, варианты ответа и время на тест')"
+               @close="emit('close')">
+      <div>
         <div v-if="!canEdit" class="mb-3 rounded-lg border border-border2 bg-bg2 p-3 text-sm text-text2">
           {{ locale.t('quiz.foreign', 'Это чужая викторина — скопируйте её себе, чтобы править') }}
         </div>
@@ -235,7 +230,7 @@ async function copySelf() {
         </div>
       </div>
 
-      <div class="flex items-center justify-end gap-2 border-t border-border2 px-4 py-3">
+      <template #footer>
         <AppButton v-if="quizId && !canEdit" variant="ghost" size="sm" :disabled="busy" @click="copySelf">
           <Copy class="size-4" /> {{ locale.t('quiz.copy', 'Скопировать себе') }}
         </AppButton>
@@ -245,7 +240,6 @@ async function copySelf() {
         <AppButton v-if="canEdit" size="sm" :disabled="!valid || busy" @click="save">
           {{ locale.t('common.save', 'Сохранить') }}
         </AppButton>
-      </div>
-    </div>
-  </div>
+      </template>
+  </EditorShell>
 </template>

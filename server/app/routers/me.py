@@ -341,6 +341,13 @@ def set_prefs(payload: dict = Body(...), user: User = Depends(get_current_user),
     flag_modified(user, "prefs")
     user.updated_at = _now()
     db.commit()
+    #Гифка на аватарке или баннере — сразу про запас её первый кадр и ролик на нашем
+    #диске (27.10.2026): CDN Klipy потом недоступен — профиль остаётся кадром, а не
+    #пустым кругом. В фоне, ответ человеку не ждёт (`klipy_media.pin`).
+    from .. import klipy_media
+    for key in ("avatar", "profile_banner"):
+        if key in incoming and merged.get(key):
+            klipy_media.pin(str(merged.get(key)))
     return {"ok": True, "prefs": merged, "updated_at": user.updated_at}
 
 

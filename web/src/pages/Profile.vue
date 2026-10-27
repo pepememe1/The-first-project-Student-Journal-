@@ -193,7 +193,8 @@ const styleSummary = computed(() => {
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[minmax(0,34rem)_minmax(0,1fr)]">
       <!-- Левая колонка: редактор. `grid`, а не `space-y`: в Tailwind 4 `space-y`
            разворачивается в правило с нулевой специфичностью (см. Settings.vue). -->
-      <div class="grid grid-cols-1 content-start gap-4 lg:order-1 xl:grid-cols-2">
+      <!-- `gb-editor-body` — общий вид полей редакторов (27.10.2026, style.css). -->
+      <div class="gb-editor-body grid grid-cols-1 content-start gap-4 lg:order-1 xl:grid-cols-2">
         <Card id="set-avatar" class="hidden lg:block" :title="locale.t('profile.avatarSection', 'Аватарка')" :pad="true">
           <button type="button" @click="cardRef?.openAvatarEditor()"
                   class="flex w-full items-center gap-3 rounded-lg border border-border2 bg-card2 px-3 py-2.5 text-left hover:border-accent">

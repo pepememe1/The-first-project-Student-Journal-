@@ -24,7 +24,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from .. import (account_sessions, audit, events, issued_credentials, login_guard,
-                rustore_push, throttle)
+                password_recovery, rustore_push, throttle)
 from .. import webdata as W
 from ..db import get_db
 from ..deps import current_jti, get_current_user
@@ -161,6 +161,73 @@ def change_own_password(body: dict = Body(...), request: Request = None,
               detail="пароль изменён самим пользователем")
     _after_password_change(db, user, by_admin=False)
     return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# ПЕРВИЧНАЯ НАСТРОЙКА — после входа по выданному паролю (27.10.2026, требование Влада)
+# ─────────────────────────────────────────────────────────────────────────────────────
+# Порядок: почта (совпадает с записью колледжа) → код из письма (`/me/contacts/email/
+# confirm`, та же дверь, что в настройках) → новый пароль дважды. После этого учётка
+# принадлежит студенту (`password_recovery.owned_by_student`). Почему текущий пароль
+# здесь не спрашивают — `password_recovery.require_onboarding`.
+
+@router.get("/me/onboarding")
+def my_onboarding(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    view = password_recovery.onboarding_view(db, user)
+    db.commit()                               #state мог стереть устаревший шифротекст
+    return view
+
+
+@router.post("/me/onboarding/email")
+def onboarding_email(body: dict = Body(...), request: Request = None,
+                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    password_recovery.require_onboarding(db, user)
+    email = password_recovery.check_onboarding_email(db, user, str(body.get("email") or ""),
+                                                     request)
+    masked = login_guard.start_email_verification(db, user, email, request)
+    return {"ok": True, "sent_to": masked}
+
+
+@router.post("/me/onboarding/password")
+def onboarding_password(body: dict = Body(...), request: Request = None,
+                        user: User = Depends(get_current_user),
+                        jti: str = Depends(current_jti), db: Session = Depends(get_db)):
+    """Новый пароль вместо выданного. Пароль — дважды, и сверяет его СЕРВЕР тоже.
+
+    ⚠️ Прочие сессии закрываются (в отличие от `/me/password`): выданный пароль знал
+    каждый, кто держал лист группы, и сессия, открытая по нему чужим, обязана умереть
+    вместе с ним. Своя — текущая — остаётся."""
+    password_recovery.require_onboarding(db, user)
+    if not login_guard.matched_self_email(db, user):
+        raise HTTPException(status_code=409,
+                            detail="Сначала подтвердите почту кодом из письма.")
+    new = str(body.get("new") or "")
+    if len(new) < MIN_PASSWORD_LEN:
+        raise HTTPException(status_code=400,
+                            detail=f"Пароль не короче {MIN_PASSWORD_LEN} символов")
+    if new != str(body.get("confirm") or ""):
+        raise HTTPException(status_code=400, detail="Пароли не совпадают")
+    from . import mfa as _mfa
+    _mfa.guard_action(db, user, str(body.get("code") or ""), request,
+                      what="первичная настройка")
+    with throttle.hash_slot() as got:
+        if not got:
+            raise HTTPException(status_code=503,
+                                detail="Сервер сейчас занят. Повторите через несколько секунд.",
+                                headers={"Retry-After": str(int(throttle.HASH_WAIT_S) or 1)})
+        if verify_password(new, user.password_hash or ""):
+            raise HTTPException(status_code=400,
+                                detail="Новый пароль совпадает с выданным — придумайте свой")
+        set_user_password(user, new)
+    user.updated_at = _now()
+    issued_credentials.forget(db, user)
+    closed = account_sessions.revoke_others(db, user.login, jti)
+    db.commit()
+    audit.log(db, request, actor=user.login, role=user.role, action="password.onboarding",
+              detail=f"почта привязана, выданный пароль заменён своим; закрыто сессий: {closed}")
+    _kick(user.id)
+    _after_password_change(db, user, by_admin=False)
+    return {"ok": True, "login": user.login}
 
 
 # ─────────────────────────────────────────────────────────────────────────────────────
@@ -304,8 +371,11 @@ def account_extra(login: str = Query(...), request: Request = None,
     нужны, а лишний показ ПДн — лишний повод для разговора при проверке 152-ФЗ."""
     target = _scope_student(db, user, login)
     cred = issued_credentials.state(db, target)
+    #Учётка студента (почта привязана, пароль свой) — кнопки сброса и правки почты
+    #колледжа в редакторе гаснут; сервер всё равно откажет сам (`owned_refusal`).
+    owned = password_recovery.owned_by_student(db, target)
     db.commit()                               #state мог стереть устаревший шифротекст
-    out = {"login": target.login, "credential": cred}
+    out = {"login": target.login, "credential": cred, "owned": owned}
     if user.role == "admin":
         out["contacts"] = login_guard.contact_view(db, target, for_admin=True)
     if cred.get("state") == issued_credentials.STATE_ISSUED:
@@ -324,6 +394,15 @@ def save_account_extra(body: dict = Body(...), request: Request = None,
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Требуются права администратора")
     target = _scope_student(db, user, str(body.get("login") or ""))
+    #🔒 Почту колледжа у учётки студента не подменить: код восстановления уходит только
+    #на совпадающую почту, и правка записи колледжа «отпирала» бы учётку в два клика —
+    #подменил почту, сбросил пароль. Телефон править можно: на нём вход не держится.
+    new_email = str(body.get("admin_email") or "").strip().lower()
+    if password_recovery.owned_by_student(db, target) and             new_email != login_guard.admin_email_of(db, target):
+        audit.log(db, request, actor=user.login, role=user.role,
+                  action="contact.admin_set.reject", target=target.login, level="warn",
+                  detail="почта колледжа не изменена: учётка принадлежит студенту")
+        raise password_recovery.owned_refusal()
     login_guard.set_admin_contacts(db, target, str(body.get("admin_email") or ""),
                                    str(body.get("admin_phone") or ""))
     db.commit()
@@ -341,6 +420,14 @@ def reset_credential(body: dict = Body(...), request: Request = None,
     пароль потерян или, хуже, узнан посторонним, и старые сессии живут на том самом
     пароле, который сбросили."""
     target = _scope_student(db, user, str(body.get("login") or ""))
+    #🔒 Пароль, который студент придумал сам при привязанной почте колледжа, не сбросить
+    #никому: восстановление — его кодом из письма (`password_recovery`).
+    if password_recovery.owned_by_student(db, target):
+        db.commit()
+        audit.log(db, request, actor=user.login, role=user.role,
+                  action="credentials.reset.reject", target=target.login, level="warn",
+                  detail="сброс отклонён: учётка принадлежит студенту")
+        raise password_recovery.owned_refusal()
     had_password = bool(target.password_hash)
     with throttle.hash_slot() as got:
         if not got:
@@ -432,6 +519,8 @@ def rollout_students(group: str = Query(...), user: User = Depends(get_current_u
         state = st["state"]
         if state == issued_credentials.STATE_NONE and s.password_hash:
             state = "preset"            #пароль задан до 4.0 — выгрузка его не тронет
+        if password_recovery.owned_by_student(db, s):
+            state = "owned"             #учётка студента — в лист выдачи не берётся
         out.append({"id": s.id, "login": s.login or "", "name": W.display_name(s),
                     "state": state})
     db.commit()
@@ -457,7 +546,7 @@ def rollout_export(body: dict = Body(...), request: Request = None,
     _scope_group(user, group)
     wanted = {str(x) for x in (body.get("student_ids") or [])}
     reset_existing = bool(body.get("reset_existing")) and user.role == "admin"
-    rows, fresh = [], 0
+    rows, fresh, skipped = [], 0, 0
     with throttle.hash_slot(wait=60) as got:
         #Выдача новых паролей считает хеш на каждого — это десятки хешей подряд, и
         #занять ими оба слота значило бы запереть вход всему колледжу. Один слот на всю
@@ -468,6 +557,11 @@ def rollout_export(body: dict = Body(...), request: Request = None,
         for s in W.students_in_group(db, group):
             if s.id not in wanted:
                 continue
+            #🔒 Учётку студента в лист не берём, даже если её отметили: галочку гасит
+            #страница, а запрос отправляется и руками.
+            if password_recovery.owned_by_student(db, s):
+                skipped += 1
+                continue
             password, mark = issued_credentials.for_rollout(db, s, by=user.login,
                                                             reset_existing=reset_existing)
             if mark == "new":
@@ -477,10 +571,16 @@ def rollout_export(body: dict = Body(...), request: Request = None,
                          "login": s.login or "", "password": password,
                          "note": _ROLLOUT_NOTES.get(mark, "")})
     db.commit()
+    if not rows and skipped:
+        raise HTTPException(status_code=409,
+                            detail="Отмеченные студенты привязали почту и сменили пароль — "
+                                   "их учётки в лист не берутся.",
+                            headers={"X-Gb-Reason": "account_owned"})
     if not rows:
         raise HTTPException(status_code=400, detail="Не отмечено ни одного студента группы")
     audit.log(db, request, actor=user.login, role=user.role, action="credentials.rollout",
-              target=group, detail=f"строк в документе: {len(rows)}, выдано новых: {fresh}")
+              target=group, detail=f"строк в документе: {len(rows)}, выдано новых: {fresh}, "
+                                   f"пропущено учёток студентов: {skipped}")
     from .. import xlsx_export
     data = xlsx_export.build_credentials_xlsx(group, rows)
     from urllib.parse import quote

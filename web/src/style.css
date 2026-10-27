@@ -331,6 +331,9 @@
 .gb-profile-window {
   max-width: 64rem;
   max-height: 90vh;
+  /* dvh — видимая высота: на телефоне `vh` больше экрана с панелями браузера, и низ окна
+     уходил под них. Где dvh не понимают, остаётся строка выше. */
+  max-height: 90dvh;
 }
 @media (min-width: 640px) {
   .gb-profile-window { height: min(50rem, 90vh); }
@@ -830,3 +833,30 @@ html.gb-contrast :is(a, button).bg-accent-glow * { color: #fff !important; }
   .gb-table-pin :is(th, td):last-child { right: 0; }
   .gb-table-pin thead :is(th, td) { background: inherit; }
 }
+
+/* ━━ РЕДАКТОРЫ: ЕДИНЫЙ ВИД ПОЛЕЙ (27.10.2026, требование Влада «обновить дизайн для
+   редакторов») ━━
+   Каркас окна — `components/ui/EditorShell.vue`; здесь — поля внутри его тела и внутри
+   редакторов, встроенных в страницу (профиль, «О беседе»): тот же класс `gb-editor-body`.
+   ⚠️ ВНЕ @layer НАМЕРЕННО: у Tailwind v4 слой utilities старше слоя components, и правило
+   в слое проиграло бы `rounded-sm` каждого поля. Поэтому правила узкие: скругление,
+   кольцо фокуса и подписи — то, что должно совпадать во всех редакторах. Цвета — только
+   токены темы. */
+.gb-editor-body :is(input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']), select, textarea) {
+  border-radius: 0.625rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.gb-editor-body :is(input, select, textarea):focus-visible {
+  outline: none;
+  border-color: var(--gb-accent);
+  box-shadow: 0 0 0 3px var(--gb-accent-glow);
+}
+.gb-editor-body :is(input, select, textarea):disabled { cursor: not-allowed; }
+/* Подпись поля (`<label><span class="… uppercase …">`) — заметнее, чем подсказка под ним. */
+.gb-editor-body label > span.uppercase:first-child {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--gb-text2);
+}
+/* Кнопки-значки рядом с полем (сгенерировать, скопировать) — то же скругление, что у поля. */
+.gb-editor-body button.size-10 { border-radius: 0.625rem; }

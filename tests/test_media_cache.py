@@ -174,6 +174,10 @@ def _get(url, headers=None):
         return e.code, "", b""
 
 
+#Та же гифка с боевого сервера — так её теперь берёт кэш программы.
+MIRROR = "https://prod.invalid/media/klipy/" + URL.split("static.klipy.com/", 1)[1]
+
+
 @pytest.fixture
 def net(monkeypatch, cache_dir):
     """Подменённая сеть: что «скачано» и сколько раз."""
@@ -198,7 +202,27 @@ def test_gif_is_served_from_cache_the_second_time(api, net):
     assert _get(u)[:2] == (200, "image/gif")
     status, _, body = _get(u)
     assert status == 200 and body == GIF
-    assert net == [URL], "вторая гифка обязана прийти из кэша, а не из сети"
+    #27.10.2026: файл берётся с НАШЕГО сервера (`/media/klipy/…`) — без VPN CDN Klipy
+    #открывается не у всех. И только один раз: вторая гифка — из кэша.
+    assert net == [MIRROR], "вторая гифка обязана прийти из кэша, а не из сети"
+
+
+def test_gif_falls_back_to_the_cdn_when_our_server_has_none(api, net, monkeypatch):
+    """Сервер гифку не отдал (Klipy недоступен и ему) — пробуем CDN напрямую: на этой
+    машине он может быть открыт. Обратный ход: убрать запасной путь — краснеет."""
+    from desktop import local_api
+    real = local_api._download_image
+
+    def mirror_down(url, limit):
+        if url.startswith("https://prod.invalid/"):
+            net.append(url)
+            raise local_api._MediaMissing()
+        return real(url, limit)
+
+    monkeypatch.setattr(local_api, "_download_image", mirror_down)
+    u = api.url("/desk/media?u=" + urllib.parse.quote(URL, safe=""))
+    assert _get(u)[:2] == (200, "image/gif")
+    assert net == [MIRROR, URL]
 
 
 def test_only_klipy_cdn_over_https(api, net):

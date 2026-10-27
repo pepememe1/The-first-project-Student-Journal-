@@ -27,6 +27,8 @@ import BrandLogo from '@/components/BrandLogo.vue'
 import Mascot from '@/components/Mascot.vue'
 import RegisterDialog from '@/components/RegisterDialog.vue'
 import RecoverDialog from '@/components/RecoverDialog.vue'
+import PasswordRecoveryDialog from '@/components/auth/PasswordRecoveryDialog.vue'
+import { saveCredential } from '@/utils/credentialStore'
 import { getTrustToken } from '@/utils/trustToken'
 
 const router = useRouter()
@@ -251,19 +253,9 @@ function keepSubmitVisible() {
   }, 350)
 }
 
-// Предложить браузеру/менеджеру паролей сохранить вход. Для SPA/AJAX-входа одних
-// autocomplete-атрибутов мало — надёжно срабатывает Credential Management API
-// (navigator.credentials.store). Побочный бонус: когда пароль сохранён в системном
-// менеджере, iOS предлагает автозаполнение по Face ID, Android — по отпечатку. Где API
-// нет (Safari/Firefox) — молча полагаемся на autocomplete-эвристику браузера.
-async function saveCredential(id, pass) {
-  try {
-    if (window.PasswordCredential) {
-      const cred = new window.PasswordCredential({ id, password: pass, name: id })
-      await navigator.credentials.store(cred)
-    }
-  } catch { /* сохранение необязательно — не мешаем входу */ }
-}
+// Предложить браузеру сохранить вход — `utils/credentialStore.js` (одна функция на вход,
+// восстановление кодом и первичную настройку учётки).
+
 
 // ━━ ОБРАТНЫЙ ОТСЧЁТ БЛОКИРОВКИ ━━
 // Сервер присылает Retry-After один раз; дальше время идёт у человека на глазах.
@@ -287,6 +279,31 @@ const lockLabel = computed(() => {
   return m > 0 ? `${m}:${String(s % 60).padStart(2, '0')}` : `${s} с`
 })
 
+// ━━ «ЗАБЫЛИ ПАРОЛЬ?» ПОСЛЕ ДВУХ НЕУДАЧ (27.10.2026, требование Влада) ━━
+// Кнопка не висит всегда: первая неудача почти всегда опечатка, и предложение сбросить
+// пароль после неё уводит человека в почту, когда достаточно было набрать заново. После
+// второй — уже похоже на «не помню». Заперт вход (восьмая неудача или перезагрузка
+// страницы посреди блокировки) — тоже показываем: ждать пять минут ради пароля, которого
+// человек не помнит, бессмысленно.
+// ⚠️ Это НЕ самообслуживание, выключенное `SELF_SERVICE_ENABLED`: то окно (ссылкой, без
+// сверки почты) не возвращается. Код здесь уходит только на почту, совпадающую и с
+// подтверждённой в профиле, и с той, что вписал администратор.
+const failedLogins = ref(0)
+const FORGOT_AFTER = 2
+const showForgot = computed(() => failedLogins.value >= FORGOT_AFTER || lockLeft.value > 0)
+const showCodeRecover = ref(false)
+function openCodeRecover() {
+  if (!showForgot.value) return
+  showCodeRecover.value = true
+}
+async function onRecovered({ login: who, password: pass }) {
+  showCodeRecover.value = false
+  failedLogins.value = 0
+  login.value = who
+  password.value = pass
+  await submit()
+}
+
 async function submit() {
   if (auth.loading) return
   if (!login.value.trim() || !password.value) {
@@ -309,6 +326,7 @@ async function submit() {
     router.push(landing(user))
   } catch (e) {
     if (e.response?.status === 403) needApproval.value = true
+    if (e.response?.status === 401 && auth.errorKind === 'credentials') failedLogins.value += 1
     // Far Cry: решение принял СЕРВЕР (седьмая неудача подряд + шанс) и сообщил
     // заголовком. Клиент только рисует — своего броска здесь нет и быть не может.
     if (e.response?.headers?.['x-gb-egg'] === 'farcry_vaas_quote') easter.show('farcry_vaas_quote')
@@ -623,9 +641,12 @@ function openRecover() {
               <ul v-if="hints.length" class="mt-1.5 list-disc space-y-0.5 pl-4 text-xs text-text2">
                 <li v-for="h in hints" :key="h">{{ hintText[h] }}</li>
               </ul>
-              <p class="mt-1.5 text-xs text-text3">{{ loc.t('login.forgotHint', 'Не помните пароль? Его меняет администратор колледжа — обратитесь к нему или к куратору группы.') }}</p>
+              <p class="mt-1.5 text-xs text-text3">{{ loc.t('login.forgotHint', 'Не помните пароль? Если вы привязали почту — восстановите его кодом из письма. Иначе обратитесь к администратору или куратору группы.') }}</p>
             </template>
           </div>
+          <button v-if="showForgot" type="button"
+                  class="self-start text-sm font-semibold text-accent underline-offset-2 hover:underline"
+                  @click="openCodeRecover">{{ loc.t('login.forgotButton', 'Забыли пароль?') }}</button>
 
           <Transition enter-active-class="transition duration-200" enter-from-class="opacity-0 -translate-y-1">
             <label v-if="showTrust && !insideApp" class="flex cursor-pointer select-none items-start gap-2 text-sm text-text2">
@@ -809,6 +830,9 @@ function openRecover() {
          НЕ удалены — запрет снимается одной строкой `SELF_SERVICE_ENABLED`. -->
     <RegisterDialog v-if="SELF_SERVICE_ENABLED && showRegister" @close="showRegister = false" />
     <RecoverDialog v-if="SELF_SERVICE_ENABLED && showRecover" @close="showRecover = false" />
+    <!-- Восстановление кодом — своё окно и своё условие (две неудачи), см. `showForgot`. -->
+    <PasswordRecoveryDialog v-if="showForgot && showCodeRecover" :login="login"
+                            @close="showCodeRecover = false" @done="onRecovered" />
 
     <!-- Футер — заполняет низ, даёт «завершённость» экрану. -->
     <p class="absolute bottom-3 left-1/2 z-10 hidden w-full max-w-[94vw] -translate-x-1/2 px-4 text-center text-tiny leading-relaxed text-text3 sm:block">

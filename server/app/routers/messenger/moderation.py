@@ -610,7 +610,9 @@ def _inbox_state(db: Session, conv) -> dict:
         if last_reply is not None:
             q = q.filter(Message.id > last_reply.id)
         fresh = q.count()
-    return {"last_at": last.created_at or "", "last_body": (last.body or "")[:200],
+    #Изображение — подписью, а не обрывком base64 (`kind == "image"`, 28.10.2026).
+    preview = "[изображение]" if (last.kind or "") == "image" else (last.body or "")[:200]
+    return {"last_at": last.created_at or "", "last_body": preview,
             "last_from": last.sender_id or "", "fresh": fresh}
 
 

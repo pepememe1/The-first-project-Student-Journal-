@@ -62,7 +62,11 @@ async function requestClose() {
        @click.self="requestClose">
     <div class="gb-profile-window flex w-full overflow-hidden rounded-xl border border-border2
                 bg-card shadow-card">
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <!-- `max-h-[inherit]`: на телефоне у окна нет заданной высоты, только потолок, и в
+           строчном flex карточка вытягивалась во всю свою высоту — `overflow-hidden` окна
+           обрезал низ профиля, а прокрутить его было нечем (27.10.2026). Потолок окна
+           наследуется, и прокручивается сама карточка. -->
+      <div class="max-h-[inherit] min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <PeerProfileCard :user-id="userId" :peer-data="peerData" @messaged="emit('close')" />
       </div>
       <SharedGroupsChannels :user-id="targetId" class="hidden sm:block" @navigate="emit('close')" />

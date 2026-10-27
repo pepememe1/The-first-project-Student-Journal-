@@ -324,6 +324,9 @@ def _notify_loud_mentions(db: Session, conv: Conversation, sender: User, mention
 #там значок «@» уже не помогает: чат в таком состоянии открывают целиком, а не по кнопке.
 _MENTION_SCAN_LIMIT = 200
 _MAX_MSG_CHARS = 4000          #лимит длины сообщения (защита БД от «простыней»/спама)
+#Сообщение-изображение — data:URL; потолок с запасом над аватаркой беседы из обрезчика
+#(JPEG до сотни-другой КБ), но не настолько, чтобы лента стала хранилищем файлов.
+_MAX_IMAGE_CHARS = 700_000
 _DEFAULT_PAGE = 50            #сколько сообщений отдаём за один запрос истории
 _MAX_PAGE = 100
 _MAX_NOTE_CHARS = 300           #личная заметка о человеке (UserNote) — короче «О себе»,
@@ -1026,7 +1029,10 @@ def _msg_out(m: Message, me_id: str = "", sender_name: str = "", att: dict = Non
         "sender_name": sender_name,
         "mine": bool(me_id) and m.sender_id == me_id,
         "kind": getattr(m, "kind", "") or "text",          #§D6: text | system
-        "body": "" if deleted else (m.body or ""),
+        #Изображение — подписанной ссылкой, а не data:URL (`media_refs`, вид «m»).
+        "body": "" if deleted else (
+            media_refs.ref_url("m", str(m.id), m.body or "")
+            if (getattr(m, "kind", "") or "") == "image" else (m.body or "")),
         "body_format": getattr(m, "body_format", "") or "markdown",  #§D1
         "created_at": m.created_at,
         "edited_at": "" if deleted else (m.edited_at or ""),
@@ -1448,6 +1454,10 @@ def _saved_context(db: Session, conv_id: str, user: User) -> str:
     rows.reverse()
     lines = []
     for m in rows:
+        #Только текст: тело гифки — ссылка, изображения — data:URL на сотни КБ, и модели
+        #в контексте они ни к чему.
+        if (getattr(m, "kind", "") or "text") != "text":
+            continue
         body = (m.body or "").strip()
         #Сами команды в контекст не тянем — это шум, а не заметка.
         if not body or _VECTOR_CMD_RE.match(body):

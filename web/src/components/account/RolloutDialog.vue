@@ -68,24 +68,31 @@ async function pickGroup(name) {
   try {
     const { data } = await accountApi.rolloutStudents(name)
     students.value = data.students || []
-    picked.value = new Set(students.value.map((s) => s.id))
+    picked.value = new Set(pickable().map((s) => s.id))
   } catch (e) {
     error.value = e?.response?.data?.detail || loc.t('rollout.loadFailed', 'Не удалось загрузить группы')
   }
 }
 
+// Учётку студента (почта привязана, пароль свой — 27.10.2026) в лист не взять: галочка
+// погашена здесь, а запрос с ней сервер всё равно пропустит сам.
+const isOwned = (s) => s.state === 'owned'
+const pickable = () => students.value.filter((s) => !isOwned(s))
+
 function toggle(id) {
+  if (students.value.some((s) => s.id === id && isOwned(s))) return
   const next = new Set(picked.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
   picked.value = next
 }
-function toggleAll(on) { picked.value = on ? new Set(students.value.map((s) => s.id)) : new Set() }
+function toggleAll(on) { picked.value = on ? new Set(pickable().map((s) => s.id)) : new Set() }
 
 function stateLabel(s) {
   if (s.state === 'issued') return loc.t('rollout.stateIssued', 'пароль выдан')
   if (s.state === 'changed') return loc.t('rollout.stateChanged', 'сменил пароль сам')
   if (s.state === 'preset') return loc.t('rollout.statePreset', 'пароль задан ранее')
+  if (isOwned(s)) return loc.t('rollout.stateOwned', 'учётка студента — не выдаётся')
   return loc.t('rollout.stateNone', 'будет выдан новый')
 }
 
@@ -160,8 +167,9 @@ async function download() {
             <p v-if="!students.length" class="py-3 text-center text-sm text-text3">{{ loc.t('rollout.noStudents', 'В группе нет студентов') }}</p>
             <ul class="divide-y divide-border rounded-md border border-border">
               <li v-for="(s, i) in students" :key="s.id">
-                <label class="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-bg2/60">
-                  <input type="checkbox" class="size-4" :checked="picked.has(s.id)" @change="toggle(s.id)" />
+                <label class="flex items-center gap-3 px-3 py-2 text-sm"
+                       :class="isOwned(s) ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-bg2/60'">
+                  <input type="checkbox" class="size-4" :checked="picked.has(s.id)" :disabled="isOwned(s)" @change="toggle(s.id)" />
                   <span class="w-6 text-right text-text3">{{ i + 1 }}</span>
                   <span class="min-w-0 flex-1 truncate text-text">{{ s.name }}</span>
                   <span class="shrink-0 text-tiny" :class="s.state === 'changed' ? 'text-orange' : 'text-text3'">{{ stateLabel(s) }}</span>

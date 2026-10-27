@@ -679,6 +679,8 @@ class LocalAPI:
                 #Подтверждение устройства: без него новый ПК не мог попасть внутрь
                 #вообще никак, кроме правки базы руками (см. шапку моста).
                 install_connect_bridge(app)
+                #Восстановление пароля кодом: тоже до входа, тоже только на бою.
+                install_recovery_bridge(app)
                 #Раздел «Сервер»: управление боевой машиной по SSH. Живёт ТОЛЬКО здесь,
                 #в локальном сервере программы. На бою этого кода нет вовсе — там
                 #работает `routers/serverinfo.py`, который умеет только смотреть.
@@ -1061,6 +1063,9 @@ _PROXY_PREFIXES = ("/web/messenger", "/web/admin/server",
                    #сессии ЛОКАЛЬНОГО сервера — правдоподобную ложь, а сменённый пароль
                    #и выданный стартовый не существовали бы нигде, кроме этой машины.
                    "/me/sessions", "/me/contacts", "/me/password", "/web/accounts",
+                   #Первичная настройка после входа по выданному паролю (27.10.2026):
+                   #те же таблицы без зеркала, и пароль меняется на бою.
+                   "/me/onboarding",
                    #🔥 РАЗДЕЛЫ БЕЗ ЗЕРКАЛА (аудит 22.09.2026, F-02 и сверка платформ). Их
                    #таблиц нет в SYNC_MODELS, значит в копии их нет и не будет: курсы в
                    #программе открывались пустыми, выданное согласие на доступ родителя
@@ -1706,16 +1711,37 @@ def _serve_klipy(url: str):
     from desktop import media_cache
     if not _klipy_url_ok(url):
         return Response(status_code=400)
+    mirror = _klipy_mirror(url)
     try:
         mime, body = media_cache.fetch_through(
-            "gif", url, lambda: _download_image(url, media_cache.MAX_ITEM_BYTES["gif"]))
+            "gif", url, lambda: _download_klipy(url, mirror, media_cache.MAX_ITEM_BYTES["gif"]))
     except _MediaMissing:
         return Response(status_code=404)
     except Exception as e:      # noqa: BLE001
-        #Кэш не обязан работать: гифка уходит прямо с CDN, как до появления кэша.
+        #Кэш не обязан работать: гифка уходит с нашего сервера (а без его адреса — с CDN),
+        #как до появления кэша.
         _LOG.info(f"[media-cache] гифка мимо кэша: {type(e).__name__}: {e}")
-        return RedirectResponse(url, status_code=302)
+        return RedirectResponse(mirror or url, status_code=302)
     return _image_response(mime, body)
+
+
+def _klipy_mirror(url: str) -> str:
+    """Та же гифка с боевого сервера (`/media/klipy/…`, 27.10.2026): без VPN CDN Klipy
+    открывается не у всех, а наш сервер до него доходит. '' — адреса боя нет."""
+    from app import klipy_media
+    base = _media_base()
+    path = klipy_media.path_of_url(url)
+    return f"{base}{klipy_media.PREFIX}{path}" if base and path else ""
+
+
+def _download_klipy(url: str, mirror: str, cap: int):
+    """Сначала с нашего сервера, затем — прямо с CDN (вдруг на этой машине он открыт)."""
+    if mirror:
+        try:
+            return _download_image(mirror, cap)
+        except Exception as e:      # noqa: BLE001
+            _LOG.info(f"[media-cache] гифка с сервера не получена: {type(e).__name__}: {e}")
+    return _download_image(url, cap)
 
 
 def _media_base() -> str:
@@ -2471,6 +2497,78 @@ def install_connect_bridge(app) -> None:
     #нечего и некому.
     for _ in range(3):
         app.router.routes.insert(0, app.router.routes.pop())
+
+
+#Что из тела восстановления уходит на бой — поимённо: мост без токена не должен
+#пересылать то, чего бой от этих ручек не ждёт.
+_RECOVERY_FIELDS = {"/auth/recover/code/start": ("login", "email"),
+                    "/auth/recover/code/verify": ("login", "code"),
+                    "/auth/recover/confirm": ("token", "password", "code")}
+
+
+def install_recovery_bridge(app) -> None:
+    """«Забыли пароль?» внутри программы говорит с БОЕВЫМ сервером (27.10.2026).
+
+    Почта, код и пароль живут только на бою (`UserContact` не в SYNC_MODELS, письма шлёт
+    бой): локальная копия ответила бы «код отправлен», не отправив ничего, а пароль
+    сменился бы на одной этой машине. Входа ещё нет, поэтому общий прокси (он
+    подставляет боевой токен вошедшего) здесь не годится — пересылка без токена, как у
+    подтверждения устройства. Стороннюю страницу отсекает общая заслонка origin.
+
+    ⚠️ Признак `X-Gb-Reason` (бою нужен код второго фактора) передаётся дальше: без него
+    страница не поняла бы, что надо показать поле кода."""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from starlette.concurrency import run_in_threadpool
+
+    def _make(path):
+        async def _handler(request: Request):
+            body = {}
+            try:
+                body = await request.json()
+            except Exception:
+                pass
+            payload = {k: str((body or {}).get(k) or "")[:200]
+                       for k in _RECOVERY_FIELDS[path]}
+            code, data, reason = await run_in_threadpool(
+                _forward_to_server_with_reason, path, payload)
+            headers = {"X-Gb-Reason": reason} if reason else None
+            return JSONResponse(data, status_code=code, headers=headers)
+        return _handler
+
+    for path in _RECOVERY_FIELDS:
+        app.post(path)(_make(path))
+    #В НАЧАЛО: иначе первыми сработали бы штатные ручки серверного приложения, и запрос
+    #ушёл бы в локальную копию.
+    for _ in range(len(_RECOVERY_FIELDS)):
+        app.router.routes.insert(0, app.router.routes.pop())
+
+
+def _forward_to_server_with_reason(path: str, payload: dict) -> tuple:
+    """`_forward_to_server` для POST, плюс заголовок `X-Gb-Reason` ответа боя."""
+    try:
+        from data import app_settings
+        base = (app_settings.get_api_url() or "").rstrip("/")
+    except Exception as e:
+        return 503, {"detail": f"Адрес сервера недоступен: {e}"}, ""
+    if not base:
+        return 503, {"detail": "Адрес сервера не задан — укажите его в настройках программы."}, ""
+    try:
+        import httpx
+    except Exception as e:
+        return 503, {"detail": f"Нет пакета httpx ({e}) — установите зависимости."}, ""
+    try:
+        r = httpx.post(f"{base}{path}", json=payload,
+                       headers={"X-Device-Id": machine_device_id(), "X-Gb-App": _APP_TAG},
+                       timeout=20.0)
+    except Exception as e:
+        _LOG.warning(f"[recover] {path}: {type(e).__name__}: {e}")
+        return 503, {"detail": "Нет связи с сервером. Проверьте интернет."}, ""
+    try:
+        data = r.json()
+    except Exception:
+        data = {"detail": r.text[:200]}
+    return r.status_code, data, r.headers.get("x-gb-reason", "")
 
 
 def _try_remote_login(login: str, password: str):

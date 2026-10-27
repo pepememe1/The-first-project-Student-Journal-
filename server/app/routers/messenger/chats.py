@@ -945,6 +945,9 @@ def rename_conversation(conv_id: str, payload: dict = Body(...),
             #уезжает в предпросмотр списка чатов — data:URL на сотню килобайт там не
             #место. Клиент возьмёт свежую картинку из карточки беседы.
             events.append(("avatar_changed", "1" if conv.avatar else ""))
+            #Гифка беседы — про запас на нашем диске, как гифка профиля (`klipy_media.pin`).
+            from ... import klipy_media
+            klipy_media.pin(conv.avatar or "")
 
     if changed:
         db.commit()

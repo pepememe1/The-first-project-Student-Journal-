@@ -4,6 +4,7 @@
 // «определить границы и нормально поставить», затем сохраняет. Экспорт — квадрат 256×256
 // JPEG (data:URL) в prefs. Всё в браузере, без сети и сторонних библиотек.
 import { ref, onBeforeUnmount } from 'vue'
+import EditorShell from '@/components/ui/EditorShell.vue'
 
 defineProps({ current: { type: String, default: '' } })
 const emit = defineEmits(['save', 'close'])
@@ -96,10 +97,9 @@ function remove() { emit('save', '') }        // удалить аватарку
 </script>
 
 <template>
-  <div v-back-close class="fixed inset-0 z-50 grid place-items-center p-4" style="background: var(--gb-overlay)"
-       @click.self="emit('close')">
-    <div class="w-full max-w-sm rounded-xl border border-border2 bg-card p-5 shadow-card">
-      <h3 class="mb-4 font-title text-lg font-bold text-text">Аватарка</h3>
+  <!-- Каркас — общий для редакторов (`EditorShell.vue`, 27.10.2026). -->
+  <EditorShell title="Аватарка" subtitle="Перетащите и приблизьте, чтобы поместить в круг"
+               icon="edit" size="sm" @close="emit('close')">
 
       <!-- Вьюпорт с круглой рамкой -->
       <div class="mx-auto mb-3" style="width: 256px; max-width: 100%;">
@@ -127,16 +127,15 @@ function remove() { emit('save', '') }        // удалить аватарку
         <input type="file" accept="image/*" class="hidden" @change="onFile" />
       </label>
 
-      <div class="flex flex-wrap gap-2">
-        <button type="button" @click="save" :disabled="!img"
-                class="flex-1 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-          Сохранить
-        </button>
+      <template #footer>
         <button v-if="current" type="button" @click="remove"
-                class="rounded-lg border border-border2 px-4 py-2 text-sm text-red hover:bg-bg2">Удалить</button>
+                class="mr-auto rounded-lg border border-border2 px-4 py-2 text-sm text-red hover:bg-bg2">Удалить</button>
         <button type="button" @click="emit('close')"
                 class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">Отмена</button>
-      </div>
-    </div>
-  </div>
+        <button type="button" @click="save" :disabled="!img"
+                class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
+          Сохранить
+        </button>
+      </template>
+  </EditorShell>
 </template>

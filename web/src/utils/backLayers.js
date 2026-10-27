@@ -12,6 +12,8 @@
  * Закрывается только верхний слой, открытый последним.
  */
 
+import { lockFor, syncLock, unlockFor } from './scrollLock.js'
+
 //Открытые слои по порядку открытия: последний — верхний.
 const _layers = []
 
@@ -88,6 +90,9 @@ export function closeTopLayer() {
 export const vBackClose = {
   mounted(el, binding) {
     el.__gbBack = binding.value
+    //Панель или меню во весь экран запирает страницу под собой — как окно `v-dialog`
+    //(utils/scrollLock.js). Меню у кнопки не запирает: оно экран не закрывает.
+    lockFor(el)
     pushLayer(el, () => {
       //Функцию берём в момент нажатия: шаблон пересоздаёт её при каждой отрисовке.
       if (typeof el.__gbBack === 'function') el.__gbBack()
@@ -96,9 +101,11 @@ export const vBackClose = {
   },
   updated(el, binding) {
     el.__gbBack = binding.value
+    syncLock(el)               //спрятали через v-show — страница не остаётся запертой
   },
   unmounted(el) {
     removeLayer(el)
+    unlockFor(el)
     delete el.__gbBack
   },
 }

@@ -367,11 +367,19 @@ def send_message(conv_id: str, payload: dict = Body(...),
     #прогонять URL через censor() рискованно: случайное совпадение с корнем матерного слова
     #испортило бы саму ссылку (censor меняет символы НА МЕСТЕ, длина та же).
     is_gif = (payload.get("kind") or "").strip() == "gif"
+    #Изображение (27.10.2026): «поделиться» аватаркой беседы в другой чат. Тело —
+    #data:URL растровой картинки; проверка та же, что у аватарки (`media_refs.decode`,
+    #без SVG), плюс потолок размера. Как и у гифки, команды, упоминания и цензура мимо.
+    is_image = (payload.get("kind") or "").strip() == "image"
+    if is_image:
+        from ... import media_refs
+        if len(body) > _MAX_IMAGE_CHARS or media_refs.decode(body) is None:
+            raise HTTPException(status_code=400, detail="Недопустимое изображение")
     if is_gif:
         from ... import gif_service
         if not gif_service.is_allowed_url(body):
             raise HTTPException(status_code=400, detail="Недопустимая ссылка на GIF")
-    elif len(body) > _MAX_MSG_CHARS:
+    elif not is_image and len(body) > _MAX_MSG_CHARS:
         body = body[:_MAX_MSG_CHARS]
     reply_to = int(payload.get("reply_to_id") or 0)
     reply_quote = ""
@@ -402,7 +410,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
             return out
 
     mentions = []
-    if not is_gif:
+    if not is_gif and not is_image:
         #§12: «/отчет [группа]» — команда, а не сообщение: разбираем ДО сохранения и отдаём
         #созданную кнопку отчёта. Иначе текст команды оставался бы в ленте мусором (особенно
         #заметным в чате родителей), а ошибка («не та группа», «нет прав») тонула молча.
@@ -441,7 +449,7 @@ def send_message(conv_id: str, payload: dict = Body(...),
     #второй в ленту попадёт файл, которого в хранилище нет, без третьей — файл «переедет»
     #в беседу, участником которой отправитель может и не быть.
     att_id = str(payload.get("attachment_id") or "")
-    kind = "gif" if is_gif else "text"
+    kind = "gif" if is_gif else ("image" if is_image else "text")
     if att_id:
         att = db.query(Attachment).filter(Attachment.id == att_id).first()
         if (att is None or not att.ready
@@ -454,7 +462,8 @@ def send_message(conv_id: str, payload: dict = Body(...),
                 created_at=_now(), reply_to_id=reply_to, reply_quote=reply_quote,
                 mentions=mentions,
                 kind=kind, attachment_id=att_id,
-                body_format="plain" if is_gif else "markdown", client_nonce=nonce)
+                body_format="plain" if (is_gif or is_image) else "markdown",
+                client_nonce=nonce)
     db.add(m)
     #Маршрут обращения — в ЭТОЙ ЖЕ транзакции (F-14), см. `_route_moderation`.
     mod_reply = _route_moderation(db, conv, user, body)

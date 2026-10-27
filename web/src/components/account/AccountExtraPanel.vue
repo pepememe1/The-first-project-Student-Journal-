@@ -13,6 +13,11 @@
  *     Пароль, придуманный самим человеком, не виден никому — это держит сервер сверкой
  *     хеша, а не эта панель.
  *
+ *   • УЧЁТКА СТУДЕНТА (27.10.2026, требование Влада). Студент привязал почту, совпавшую с
+ *     записью колледжа, и сменил пароль сам — сброс и правка почты колледжа здесь гаснут:
+ *     восстанавливает пароль он сам, кодом из письма. Кнопки гасит панель, а отказывает
+ *     СЕРВЕР (`password_recovery.owned_by_student`).
+ *
  * `login` пуст при СОЗДАНИИ пользователя: пароля ещё нет, а контакты сохраняются тем же
  * `save(login)`, который зовёт форма после создания.
  */
@@ -40,6 +45,7 @@ const loadError = ref('')
 
 const contacts = computed(() => data.value?.contacts || null)
 const cred = computed(() => data.value?.credential || null)
+const owned = computed(() => !!data.value?.owned)
 
 async function load() {
   data.value = null
@@ -114,6 +120,10 @@ async function reset() {
                 class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 hover:border-accent hover:text-accent disabled:opacity-50"
                 @click="reset"><RotateCw class="size-4" /></button>
       </div>
+      <div v-else-if="owned" class="flex items-start gap-2 rounded-sm border border-accent/30 bg-accent-glow px-3 py-2 text-sm">
+        <GbIcon name="locked" class="mt-0.5 size-4 shrink-0 text-accent" />
+        <span class="text-text2">{{ loc.t('extra.owned', 'Учётка принадлежит студенту: почта привязана, пароль придуман им самим. Сбросить пароль и сменить почту колледжа нельзя — забытый пароль студент восстанавливает сам, кодом из письма.') }}</span>
+      </div>
       <div v-else-if="cred" class="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border2 bg-card2 px-3 py-2 text-sm">
         <span class="text-text2">{{ cred.state === 'changed'
           ? loc.t('extra.studentChanged', 'Студент сменил пароль')
@@ -132,7 +142,8 @@ async function reset() {
       </div>
       <div class="grid grid-cols-2 gap-2">
         <input v-model="adminEmail" type="email" :placeholder="loc.t('account.email', 'Почта')"
-               class="h-10 min-w-0 rounded-sm border px-3 text-sm text-text outline-none focus:border-accent"
+               :readonly="owned" :title="owned ? loc.t('extra.ownedEmail', 'Почту колледжа у учётки студента не изменить') : undefined"
+               class="h-10 min-w-0 rounded-sm border px-3 text-sm text-text outline-none focus:border-accent read-only:opacity-70"
                :class="stateCls(contacts?.email_state)" />
         <div class="flex h-10 min-w-0 items-center truncate rounded-sm border px-3 text-sm"
              :class="stateCls(contacts?.email_state)">

@@ -12,11 +12,12 @@ media.py — раздача аватарки по подписанной ссы�
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from .. import media_refs
+from .. import klipy_media, media_refs, throttle
 from ..db import get_db
-from ..models import Conversation, User
+from ..models import Conversation, Message, User
 
 router = APIRouter(tags=["media"])
 
@@ -41,6 +42,13 @@ def avatar(request: Request, k: str = "", i: str = "", v: str = "", s: str = "",
             return _gone()
         prefs = u.prefs if isinstance(u.prefs, dict) else {}
         value = prefs.get("avatar") or ""
+    elif k == "m":
+        #Сообщение-изображение. Удалённое у всех — 404: «удалил» обязано убирать и
+        #картинку, а не только строку в ленте.
+        msg = db.get(Message, int(i)) if i.isdigit() else None
+        if msg is None or msg.deleted_at or (msg.kind or "") != "image":
+            return _gone()
+        value = msg.body or ""
     else:
         conv = db.get(Conversation, i)
         if conv is None:
@@ -57,3 +65,48 @@ def avatar(request: Request, k: str = "", i: str = "", v: str = "", s: str = "",
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
     return Response(content=data, media_type=mime, headers=headers)
+
+
+#Гифка Klipy с CDN неизменна по адресу (в пути — идентификатор файла), поэтому год и
+#immutable: браузер не переспрашивает её вовсе. Личного в ней нет — `public`.
+_KLIPY_CACHE = "public, max-age=31536000, immutable"
+
+
+@router.get(klipy_media.PREFIX + "{path:path}")
+def klipy(path: str, request: Request):
+    """Гифка Klipy с нашего домена (27.10.2026): без VPN CDN Klipy открывается не у всех.
+
+    На бою закэшированный файл отдаёт Caddy сам (`@klipy_cached` в Caddyfile), сюда
+    доходят только промахи — и тогда сервер один раз скачивает файл с CDN. Входа не
+    требует: `<img>` не шлёт `Authorization`, а в файле нет ничего личного. Устройство и
+    ограничения — `app/klipy_media.py`.
+    ⚠️ Обычный `def`: поход на CDN и запись на диск блокирующие (§4.42)."""
+    if not klipy_media.path_ok(path):
+        return _gone()
+    f = klipy_media.cached(path)
+    if f is None:
+        if not klipy_media.miss_allowed(throttle.client_ip(request)):
+            return Response(status_code=429,
+                            headers={"Cache-Control": "no-store", "Retry-After": "60"})
+        f = klipy_media.fetch(path)
+        if f is None:
+            return _gone()
+        if klipy_media.sweep_due():
+            _sweep_klipy_cache()
+    return FileResponse(f, media_type=klipy_media.mime_of(path),
+                        headers={"Cache-Control": _KLIPY_CACHE,
+                                 "X-Content-Type-Options": "nosniff"})
+
+
+def _sweep_klipy_cache() -> None:
+    """Удержать кэш гифок в пределе, не трогая аватарки и баннеры. Сбой уборки не
+    должен ронять показ гифки — файл уже получен."""
+    from ..db import SessionLocal
+    db = SessionLocal()
+    try:
+        klipy_media.sweep(klipy_media.protected_paths(db))
+    except Exception as e:      # noqa: BLE001
+        from .. import events
+        events.record("warn", "klipy_sweep_failed", f"уборка кэша гифок: {e}"[:300], "", "")
+    finally:
+        db.close()

@@ -26,8 +26,16 @@
  * Слушаем `window` в фазе всплытия: обработчики полей внутри окна срабатывают раньше.
  *
  * Кнопка «назад» на телефоне закрывает окно тем же щелчком по подложке (utils/backLayers.js).
+ *
+ * Прокрутка (27.10.2026, требование Влада «отдельный скролл для окон оверлеев»). Пока
+ * открыто окно-оверлей (`position: fixed`), страница под ним НЕ прокручивается: колесо и
+ * палец над окном прокручивали журнал за подложкой, а само окно стояло. Своя прокрутка
+ * у окна — `overscroll-behavior: contain`: дойдя до края списка внутри окна, жест не
+ * перетекает на страницу. И фокус при открытии ставится БЕЗ прокрутки (`preventScroll`):
+ * первая кнопка карточки профиля бывает в середине, и окно открывалось прокрученным к ней.
  */
 import { pushLayer, removeLayer, topLayer } from '../utils/backLayers.js'
+import { fitOverlay, lockFor, syncLock, unlockFor } from '../utils/scrollLock.js'
 
 const FOCUSABLE = [
   'a[href]', 'button:not([disabled])', 'input:not([disabled]):not([type="hidden"])',
@@ -186,6 +194,9 @@ export const vDialog = {
       el.addEventListener('click', st0.onGuard, true)
     }
     _open.push(el)
+    //Оверлей во весь экран запирает страницу под собой и прокручивается сам, если окно
+    //выше экрана (utils/scrollLock.js).
+    if (lockFor(el)) fitOverlay(el, getComputedStyle(el))
     pushLayer(el, () => el.click())
     if (_open.length === 1) window.addEventListener('keydown', _onEscape)
     //Фокус внутрь — после того, как компонент отрисовал содержимое и, возможно, сам
@@ -193,9 +204,12 @@ export const vDialog = {
     requestAnimationFrame(() => {
       if (!el.isConnected || el.contains(document.activeElement)) return
       const items = focusables(el)
-      if (items.length) items[0].focus()
-      else { el.setAttribute('tabindex', '-1'); el.focus() }
+      if (items.length) items[0].focus({ preventScroll: true })
+      else { el.setAttribute('tabindex', '-1'); el.focus({ preventScroll: true }) }
     })
+  },
+  updated(el) {
+    syncLock(el)               //окно, спрятанное через v-show, страницу не держит
   },
   unmounted(el) {
     const st = el.__gbDialog
@@ -206,6 +220,7 @@ export const vDialog = {
     if (st.onGuard) el.removeEventListener('click', st.onGuard, true)
     const at = _open.lastIndexOf(el)
     if (at >= 0) _open.splice(at, 1)
+    unlockFor(el)
     removeLayer(el)
     if (!_open.length) window.removeEventListener('keydown', _onEscape)
     //Вернуть фокус туда, откуда окно открыли, — иначе после закрытия он оказывается в

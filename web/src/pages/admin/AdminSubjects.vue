@@ -13,6 +13,7 @@ import { ref, computed, onMounted } from 'vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { adminApi, scheduleApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
+import EditorShell from '@/components/ui/EditorShell.vue'
 import { useToast } from '@/composables/useToast'
 import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
 import { useLocaleStore } from '@/stores/locale'
@@ -213,17 +214,15 @@ async function importPicked(all = false) {
       </table>
     </StickyXScroll>
 
-    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
-      <div class="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminSubjects.addSubject', 'Добавить предмет') }}</h3>
-        <input v-model="name" :placeholder="locale.t('adminSubjects.subjectNamePlaceholder', 'Название предмета')" @keyup.enter="save"
-               class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
-        <p v-if="formError" class="mt-2 text-sm text-red">{{ formError }}</p>
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
-          <AppButton variant="green" size="sm" :disabled="saving" @click="save">{{ saving ? locale.t('adminSubjects.saving', 'Сохранение…') : locale.t('adminSubjects.addAction2', 'Добавить') }}</AppButton>
-        </div>
-      </div>
-    </div>
+    <EditorShell v-if="showForm" :title="locale.t('adminSubjects.addSubject', 'Добавить предмет')" icon="add" size="sm"
+                 @close="showForm = false">
+      <input v-model="name" :placeholder="locale.t('adminSubjects.subjectNamePlaceholder', 'Название предмета')" @keyup.enter="save"
+             class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+      <p v-if="formError" class="mt-2 text-sm text-red">{{ formError }}</p>
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
+        <AppButton variant="green" size="sm" :disabled="saving" @click="save">{{ saving ? locale.t('adminSubjects.saving', 'Сохранение…') : locale.t('adminSubjects.addAction2', 'Добавить') }}</AppButton>
+      </template>
+    </EditorShell>
   </div>
 </template>

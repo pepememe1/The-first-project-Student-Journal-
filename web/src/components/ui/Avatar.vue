@@ -7,7 +7,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useLocaleStore } from '@/stores/locale'
 import RoleAvatarIcon from '@/components/ui/RoleAvatarIcon.vue'
-import { gifPosterSrc, gifVideoSrc, mediaSrc, playMuted, watchInView } from '@/utils/mediaSrc'
+import { gifPosterSrc, gifStillSrc, gifVideoSrc, mediaSrc, playMuted, watchInView } from '@/utils/mediaSrc'
 const locale = useLocaleStore()
 
 const props = defineProps({
@@ -44,7 +44,15 @@ const failed = ref(false)
 const video = computed(() => gifVideoSrc(props.src))
 const poster = computed(() => gifPosterSrc(props.src))
 const videoFailed = ref(false)
-watch(shown, () => { failed.value = false; videoFailed.value = false })
+//🔑 Первый кадр — ПОДЛОЖКА, а не запасной путь после отказа (27.10.2026, требование
+//Влада «если клипи не работает — один кадр из гифки, как обычная аватарка»). Лёгкий
+//webp лежит под роликом всегда: гифка не открылась (Klipy недоступен, ролик не
+//поддержан) — человек видит кадр, а не пустой круг, и ждать таймаута CDN ради этого не
+//нужно. Кадр аватарок сервер держит у себя про запас (`klipy_media.pin`).
+const still = computed(() => gifStillSrc(props.src))
+const stillFailed = ref(false)
+const stillOk = computed(() => !!still.value && !stillFailed.value)
+watch(shown, () => { failed.value = false; videoFailed.value = false; stillFailed.value = false })
 const box = ref(null)
 const videoEl = ref(null)
 const seen = ref(false)
@@ -68,18 +76,18 @@ const initials = computed(() => {
 
 <template>
   <div ref="box" class="relative shrink-0" :style="{ width: size + 'px', height: size + 'px' }">
-    <div class="size-full overflow-hidden rounded-full" :class="hasRoleIcon || (shown && !failed) || (video && !videoFailed) ? '' : 'bg-accent'">
+    <div class="relative size-full overflow-hidden rounded-full" :class="hasRoleIcon || stillOk || (shown && !failed) || (video && !videoFailed) ? '' : 'bg-accent'">
+      <img v-if="stillOk" :src="still" alt="" decoding="async" class="absolute inset-0 size-full object-cover"
+           :style="{ objectPosition: position }" @error="stillFailed = true" />
       <template v-if="video && !videoFailed">
         <video v-if="seen" ref="videoEl" :src="video" :poster="poster" autoplay muted loop playsinline
-               preload="auto" disablepictureinpicture aria-hidden="true" class="size-full object-cover"
+               preload="auto" disablepictureinpicture aria-hidden="true" class="relative size-full object-cover"
                :style="{ objectPosition: position }" @canplay="playMuted" @error="videoFailed = true" />
-        <img v-else :src="poster" alt="" decoding="async" class="size-full object-cover"
-             :style="{ objectPosition: position }" />
       </template>
-      <img v-else-if="shown && !failed" :src="shown" alt="" class="size-full object-cover"
+      <img v-else-if="shown && !failed" :src="shown" alt="" class="relative size-full object-cover"
            :style="{ objectPosition: position }" @error="failed = true" />
-      <RoleAvatarIcon v-else-if="hasRoleIcon" :role="role" :color="color || undefined" />
-      <span v-else class="grid size-full place-items-center font-bold text-white"
+      <RoleAvatarIcon v-else-if="hasRoleIcon && !stillOk" :role="role" :color="color || undefined" />
+      <span v-else-if="!stillOk" class="grid size-full place-items-center font-bold text-white"
             :style="{ fontSize: Math.round(size * 0.4) + 'px' }">{{ initials }}</span>
     </div>
     <span v-if="online" :title="locale.t('profilePanel.online', 'в сети')"

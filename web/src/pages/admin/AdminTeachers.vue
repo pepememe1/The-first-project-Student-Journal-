@@ -9,6 +9,7 @@ import { adminApi, scheduleApi } from '@/api/endpoints'
 import { generatePassword } from '@/utils/passwordGen'
 import { copyText } from '@/utils/clipboard'
 import AppButton from '@/components/ui/AppButton.vue'
+import EditorShell from '@/components/ui/EditorShell.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useDeleteConfirm } from '@/composables/useDeleteConfirm'
@@ -199,78 +200,76 @@ async function del(t) {
       </table>
     </StickyXScroll>
 
-    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminTeachers.editTitle', 'Изменить преподавателя') : locale.t('adminTeachers.addTitle', 'Добавить преподавателя') }}</h3>
-        <div class="space-y-3">
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminTeachers.colFullName', 'ФИО') }}</span>
-            <input v-model="form.full_name" placeholder="Иванов Иван Иванович"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminTeachers.colLogin', 'Логин') }}</span>
-            <input v-model="form.login" :disabled="!!editing"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" /></label>
-          <div>
-            <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminTeachers.workload', 'Нагрузка (предметы)') }}</span>
-            <div class="max-h-48 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
-              <label v-for="s in allSubjects" :key="s" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
-                <input type="checkbox" :checked="form.subjects.includes(s)" @change="toggleSubject(s)" />
-                {{ s }}
-              </label>
-              <p v-if="!allSubjects.length" class="px-1 py-2 text-xs text-text3">{{ locale.t('adminTeachers.noSubjectsHint', 'Сначала заведите предметы во вкладке «Предметы».') }}</p>
-            </div>
+    <EditorShell v-if="showForm" :title="editing ? locale.t('adminTeachers.editTitle', 'Изменить преподавателя') : locale.t('adminTeachers.addTitle', 'Добавить преподавателя')" :icon="editing ? 'edit' : 'add'"
+                 @close="showForm = false">
+      <div class="space-y-3">
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminTeachers.colFullName', 'ФИО') }}</span>
+          <input v-model="form.full_name" placeholder="Иванов Иван Иванович"
+                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminTeachers.colLogin', 'Логин') }}</span>
+          <input v-model="form.login" :disabled="!!editing"
+                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" /></label>
+        <div>
+          <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminTeachers.workload', 'Нагрузка (предметы)') }}</span>
+          <div class="max-h-48 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
+            <label v-for="s in allSubjects" :key="s" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
+              <input type="checkbox" :checked="form.subjects.includes(s)" @change="toggleSubject(s)" />
+              {{ s }}
+            </label>
+            <p v-if="!allSubjects.length" class="px-1 py-2 text-xs text-text3">{{ locale.t('adminTeachers.noSubjectsHint', 'Сначала заведите предметы во вкладке «Предметы».') }}</p>
           </div>
-          <div>
-            <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminTeachers.curationLabel', 'Курирование групп') }} <span class="normal-case text-text3">{{ locale.t('adminTeachers.curationHint', '(куратор видит все предметы группы, только чтение)') }}</span></span>
-            <div class="max-h-40 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
-              <label v-for="g in allGroups" :key="g" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
-                <input type="checkbox" :checked="form.curated_groups.includes(g)" @change="toggleCurated(g)" />
-                {{ g }}
-              </label>
-              <p v-if="!allGroups.length" class="px-1 py-2 text-xs text-text3">{{ locale.t('adminTeachers.noGroupsHint', 'Групп пока нет.') }}</p>
-            </div>
+        </div>
+        <div>
+          <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminTeachers.curationLabel', 'Курирование групп') }} <span class="normal-case text-text3">{{ locale.t('adminTeachers.curationHint', '(куратор видит все предметы группы, только чтение)') }}</span></span>
+          <div class="max-h-40 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
+            <label v-for="g in allGroups" :key="g" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
+              <input type="checkbox" :checked="form.curated_groups.includes(g)" @change="toggleCurated(g)" />
+              {{ g }}
+            </label>
+            <p v-if="!allGroups.length" class="px-1 py-2 text-xs text-text3">{{ locale.t('adminTeachers.noGroupsHint', 'Групп пока нет.') }}</p>
           </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? locale.t('adminTeachers.newPasswordHint', 'Новый пароль (пусто — не менять)') : locale.t('adminTeachers.passwordLabel', 'Пароль') }}</span>
-            <!-- Сам пароль показать нельзя (в базе необратимый хеш), но ДАТА выдачи
-                 отвечает на реальный вопрос админа: свежий пароль или полугодовой. -->
-            <p v-if="editing" class="mb-1 text-tiny text-text3">
-              <span class="uppercase">{{ locale.t('password.issuedLabel', 'Пароль выдан:') }}</span>
-              <span class="ml-1 text-text2">{{ fmtIssued(passwordSetAt) || locale.t('password.issuedUnknown', 'неизвестно') }}</span>
-              <span v-if="form.password" class="ml-1 text-accent">{{ locale.t('password.issuedPending', '→ обновится при сохранении') }}</span>
-            </p>
-            <div class="flex gap-2">
-              <div class="relative flex-1">
-                <input v-model="form.password" :type="showPass ? 'text' : 'password'" placeholder="••••••••"
-                       class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
-                <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent"
-                        :aria-label="showPass ? locale.t('login.hide', 'Скрыть') : locale.t('login.show', 'Показать')" @click="showPass = !showPass">
-                  <GbIcon :name="showPass ? 'hide' : 'show'" class="size-4" />
-                </button>
-              </div>
-              <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
-                      :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
-                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
-                      @click="regeneratePassword">
-                <RotateCw class="size-4" />
-              </button>
-              <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
-              <button type="button" :disabled="!form.password"
-                      :title="locale.t('password.copy', 'Скопировать пароль')"
-                      :aria-label="locale.t('password.copy', 'Скопировать пароль')"
-                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
-                      @click="copyPassword">
-                <Copy class="size-4" />
+        </div>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ editing ? locale.t('adminTeachers.newPasswordHint', 'Новый пароль (пусто — не менять)') : locale.t('adminTeachers.passwordLabel', 'Пароль') }}</span>
+          <!-- Сам пароль показать нельзя (в базе необратимый хеш), но ДАТА выдачи
+               отвечает на реальный вопрос админа: свежий пароль или полугодовой. -->
+          <p v-if="editing" class="mb-1 text-tiny text-text3">
+            <span class="uppercase">{{ locale.t('password.issuedLabel', 'Пароль выдан:') }}</span>
+            <span class="ml-1 text-text2">{{ fmtIssued(passwordSetAt) || locale.t('password.issuedUnknown', 'неизвестно') }}</span>
+            <span v-if="form.password" class="ml-1 text-accent">{{ locale.t('password.issuedPending', '→ обновится при сохранении') }}</span>
+          </p>
+          <div class="flex gap-2">
+            <div class="relative flex-1">
+              <input v-model="form.password" :type="showPass ? 'text' : 'password'" placeholder="••••••••"
+                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
+              <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent"
+                      :aria-label="showPass ? locale.t('login.hide', 'Скрыть') : locale.t('login.show', 'Показать')" @click="showPass = !showPass">
+                <GbIcon :name="showPass ? 'hide' : 'show'" class="size-4" />
               </button>
             </div>
-            <span class="mt-1 block text-tiny text-text3">{{ editing
-              ? locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.')
-              : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span></label>
-          <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
-        </div>
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
-          <AppButton variant="green" size="sm" :disabled="saving" @click="save">{{ saving ? locale.t('adminTeachers.saving', 'Сохранение…') : (editing ? locale.t('common.save') : locale.t('adminTeachers.addAction2', 'Добавить')) }}</AppButton>
-        </div>
+            <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
+                    :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
+                    @click="regeneratePassword">
+              <RotateCw class="size-4" />
+            </button>
+            <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
+            <button type="button" :disabled="!form.password"
+                    :title="locale.t('password.copy', 'Скопировать пароль')"
+                    :aria-label="locale.t('password.copy', 'Скопировать пароль')"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
+                    @click="copyPassword">
+              <Copy class="size-4" />
+            </button>
+          </div>
+          <span class="mt-1 block text-tiny text-text3">{{ editing
+            ? locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.')
+            : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span></label>
+        <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
       </div>
-    </div>
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
+        <AppButton variant="green" size="sm" :disabled="saving" @click="save">{{ saving ? locale.t('adminTeachers.saving', 'Сохранение…') : (editing ? locale.t('common.save') : locale.t('adminTeachers.addAction2', 'Добавить')) }}</AppButton>
+      </template>
+    </EditorShell>
   </div>
 </template>

@@ -16,6 +16,7 @@ import { generatePassword } from '@/utils/passwordGen'
 import { copyText } from '@/utils/clipboard'
 import { useAuthStore } from '@/stores/auth'
 import AppButton from '@/components/ui/AppButton.vue'
+import EditorShell from '@/components/ui/EditorShell.vue'
 import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -257,128 +258,124 @@ async function deleteEdit() {
     </StickyXScroll>
 
     <!-- ── Новый родитель ──────────────────────────────────────────────────────── -->
-    <div v-dialog v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showCreate = false">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminParents.newParentTitle', 'Новый родитель') }}</h3>
-        <div class="space-y-3">
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colLogin', 'Логин') }}</span>
-            <input v-model="form.login" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-          <div class="grid grid-cols-2 gap-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.surname', 'Фамилия') }}</span>
-              <input v-model="form.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.firstName', 'Имя') }}</span>
-              <input v-model="form.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+    <EditorShell v-if="showCreate" :title="locale.t('adminParents.newParentTitle', 'Новый родитель')" icon="add"
+                 @close="showCreate = false">
+      <div class="space-y-3">
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colLogin', 'Логин') }}</span>
+          <input v-model="form.login" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.surname', 'Фамилия') }}</span>
+            <input v-model="form.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.firstName', 'Имя') }}</span>
+            <input v-model="form.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+        </div>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.passwordLabel', 'Пароль') }}</span>
+          <div class="flex gap-2">
+            <input v-model="form.password" type="text"
+                   class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+            <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
+                    :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
+                    @click="regenerateCreatePassword">
+              <RotateCw class="size-4" />
+            </button>
+            <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
+            <button type="button" :disabled="!form.password"
+                    :title="locale.t('password.copy', 'Скопировать пароль')"
+                    :aria-label="locale.t('password.copy', 'Скопировать пароль')"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
+                    @click="copyPassword(form.password)">
+              <Copy class="size-4" />
+            </button>
           </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.passwordLabel', 'Пароль') }}</span>
-            <div class="flex gap-2">
-              <input v-model="form.password" type="text"
-                     class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
-              <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
-                      :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
-                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
-                      @click="regenerateCreatePassword">
-                <RotateCw class="size-4" />
-              </button>
-              <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
-              <button type="button" :disabled="!form.password"
-                      :title="locale.t('password.copy', 'Скопировать пароль')"
-                      :aria-label="locale.t('password.copy', 'Скопировать пароль')"
-                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
-                      @click="copyPassword(form.password)">
-                <Copy class="size-4" />
-              </button>
-            </div>
-            <span class="mt-1 block text-tiny text-text3">{{ locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span></label>
-          <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
-        </div>
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showCreate = false">{{ locale.t('common.cancel') }}</AppButton>
-          <AppButton variant="green" size="sm" :disabled="saving" @click="createParent">
-            {{ saving ? locale.t('adminParents.saving', 'Сохранение…') : locale.t('adminParents.addAction2', 'Добавить') }}
-          </AppButton>
-        </div>
+          <span class="mt-1 block text-tiny text-text3">{{ locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span></label>
+        <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
       </div>
-    </div>
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showCreate = false">{{ locale.t('common.cancel') }}</AppButton>
+        <AppButton variant="green" size="sm" :disabled="saving" @click="createParent">
+          {{ saving ? locale.t('adminParents.saving', 'Сохранение…') : locale.t('adminParents.addAction2', 'Добавить') }}
+        </AppButton>
+      </template>
+    </EditorShell>
 
     <!-- ── Привязка ────────────────────────────────────────────────────────────── -->
-    <div v-dialog v-if="showLink" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showLink = false">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ locale.t('adminParents.linkModalTitle', 'Привязать родителя к студенту') }}</h3>
-        <div class="space-y-3">
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colParent', 'Родитель') }}</span>
-            <select v-model="linkForm.parent_id" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option v-for="p in parents" :key="p.id" :value="p.id">{{ p.full_name || p.login }}</option>
-            </select></label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colStudent', 'Студент') }}</span>
-            <select v-model="linkForm.student_id" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
-              <option v-for="s in students" :key="s.id" :value="s.id">
-                {{ s.surname }} {{ s.name }} · {{ s.group }}
-              </option>
-            </select>
-            <span v-if="!students.length" class="mt-1 block text-xs text-text3">
-              {{ locale.t('adminParents.studentsAdminOnlyHint', 'Список студентов доступен администратору.') }}
-            </span>
-          </label>
-          <p v-if="linkError" class="text-sm text-red">{{ linkError }}</p>
+    <EditorShell v-if="showLink" :title="locale.t('adminParents.linkModalTitle', 'Привязать родителя к студенту')" icon="link"
+                 @close="showLink = false">
+      <div class="space-y-3">
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colParent', 'Родитель') }}</span>
+          <select v-model="linkForm.parent_id" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+            <option v-for="p in parents" :key="p.id" :value="p.id">{{ p.full_name || p.login }}</option>
+          </select></label>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.colStudent', 'Студент') }}</span>
+          <select v-model="linkForm.student_id" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-2 text-sm text-text outline-none focus:border-accent">
+            <option v-for="s in students" :key="s.id" :value="s.id">
+              {{ s.surname }} {{ s.name }} · {{ s.group }}
+            </option>
+          </select>
+          <span v-if="!students.length" class="mt-1 block text-xs text-text3">
+            {{ locale.t('adminParents.studentsAdminOnlyHint', 'Список студентов доступен администратору.') }}
+          </span>
+        </label>
+        <p v-if="linkError" class="text-sm text-red">{{ linkError }}</p>
+      </div>
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showLink = false">{{ locale.t('common.cancel') }}</AppButton>
+        <AppButton variant="green" size="sm" :disabled="linking" @click="createLink">
+          {{ linking ? locale.t('adminParents.linking', 'Привязка…') : locale.t('adminParents.linkAction2', 'Привязать') }}
+        </AppButton>
+      </template>
+    </EditorShell>
+
+    <!-- ── Правка родителя ─────────────────────────────────────────────────────── -->
+    <EditorShell v-if="showEdit" :title="editTarget?.full_name || locale.t('adminParents.parentFallback', 'Родитель')" icon="edit"
+                 @close="showEdit = false">
+      <p class="mb-4 text-xs text-text3">{{ locale.t('adminParents.loginPrefix', 'Логин:') }} {{ editTarget?.login }}</p>
+      <div class="space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.surname', 'Фамилия') }}</span>
+            <input v-model="editForm.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.nameAndPatronymic', 'Имя Отчество') }}</span>
+            <input v-model="editForm.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
         </div>
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showLink = false">{{ locale.t('common.cancel') }}</AppButton>
-          <AppButton variant="green" size="sm" :disabled="linking" @click="createLink">
-            {{ linking ? locale.t('adminParents.linking', 'Привязка…') : locale.t('adminParents.linkAction2', 'Привязать') }}
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.newPassword', 'Новый пароль') }}</span>
+          <p class="mb-1 text-tiny text-text3">
+            <span class="uppercase">{{ locale.t('password.issuedLabel', 'Пароль выдан:') }}</span>
+            <span class="ml-1 text-text2">{{ fmtIssued(passwordSetAt) || locale.t('password.issuedUnknown', 'неизвестно') }}</span>
+            <span v-if="editForm.password" class="ml-1 text-accent">{{ locale.t('password.issuedPending', '→ обновится при сохранении') }}</span>
+          </p>
+          <div class="flex gap-2">
+            <input v-model="editForm.password" type="text" :placeholder="locale.t('adminParents.leaveEmptyHint', 'Оставьте пустым, чтобы не менять')"
+                   class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+            <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
+                    :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
+                    @click="regenerateEditPassword">
+              <RotateCw class="size-4" />
+            </button>
+            <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
+            <button type="button" :disabled="!editForm.password"
+                    :title="locale.t('password.copy', 'Скопировать пароль')"
+                    :aria-label="locale.t('password.copy', 'Скопировать пароль')"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
+                    @click="copyPassword(editForm.password)">
+              <Copy class="size-4" />
+            </button>
+          </div>
+          <span class="mt-1 block text-tiny text-text3">{{ locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.') }}</span></label>
+        <p v-if="editError" class="text-sm text-red">{{ editError }}</p>
+      </div>
+      <template #footer>
+      <div class="w-full flex items-center justify-between gap-2">
+        <AppButton variant="red" size="sm" @click="deleteEdit">{{ locale.t('common.delete') }}</AppButton>
+        <div class="flex gap-2">
+          <AppButton variant="ghost" size="sm" @click="showEdit = false">{{ locale.t('common.cancel') }}</AppButton>
+          <AppButton variant="green" size="sm" :disabled="savingEdit" @click="saveEdit">
+            {{ savingEdit ? locale.t('adminParents.saving', 'Сохранение…') : locale.t('common.save') }}
           </AppButton>
         </div>
       </div>
-    </div>
-
-    <!-- ── Правка родителя ─────────────────────────────────────────────────────── -->
-    <div v-dialog v-if="showEdit" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showEdit = false">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-1 font-title text-lg font-bold text-text">{{ editTarget?.full_name || locale.t('adminParents.parentFallback', 'Родитель') }}</h3>
-        <p class="mb-4 text-xs text-text3">{{ locale.t('adminParents.loginPrefix', 'Логин:') }} {{ editTarget?.login }}</p>
-        <div class="space-y-3">
-          <div class="grid grid-cols-2 gap-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.surname', 'Фамилия') }}</span>
-              <input v-model="editForm.surname" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.nameAndPatronymic', 'Имя Отчество') }}</span>
-              <input v-model="editForm.name" class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" /></label>
-          </div>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminParents.newPassword', 'Новый пароль') }}</span>
-            <p class="mb-1 text-tiny text-text3">
-              <span class="uppercase">{{ locale.t('password.issuedLabel', 'Пароль выдан:') }}</span>
-              <span class="ml-1 text-text2">{{ fmtIssued(passwordSetAt) || locale.t('password.issuedUnknown', 'неизвестно') }}</span>
-              <span v-if="editForm.password" class="ml-1 text-accent">{{ locale.t('password.issuedPending', '→ обновится при сохранении') }}</span>
-            </p>
-            <div class="flex gap-2">
-              <input v-model="editForm.password" type="text" :placeholder="locale.t('adminParents.leaveEmptyHint', 'Оставьте пустым, чтобы не менять')"
-                     class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
-              <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
-                      :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
-                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
-                      @click="regenerateEditPassword">
-                <RotateCw class="size-4" />
-              </button>
-              <!-- Пустое поле копировать нечего: кнопка гаснет, а не отвечает ошибкой. -->
-              <button type="button" :disabled="!editForm.password"
-                      :title="locale.t('password.copy', 'Скопировать пароль')"
-                      :aria-label="locale.t('password.copy', 'Скопировать пароль')"
-                      class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
-                      @click="copyPassword(editForm.password)">
-                <Copy class="size-4" />
-              </button>
-            </div>
-            <span class="mt-1 block text-tiny text-text3">{{ locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.') }}</span></label>
-          <p v-if="editError" class="text-sm text-red">{{ editError }}</p>
-        </div>
-        <div class="mt-5 flex items-center justify-between gap-2">
-          <AppButton variant="red" size="sm" @click="deleteEdit">{{ locale.t('common.delete') }}</AppButton>
-          <div class="flex gap-2">
-            <AppButton variant="ghost" size="sm" @click="showEdit = false">{{ locale.t('common.cancel') }}</AppButton>
-            <AppButton variant="green" size="sm" :disabled="savingEdit" @click="saveEdit">
-              {{ savingEdit ? locale.t('adminParents.saving', 'Сохранение…') : locale.t('common.save') }}
-            </AppButton>
-          </div>
-        </div>
-      </div>
-    </div>
+      </template>
+    </EditorShell>
   </div>
 </template>

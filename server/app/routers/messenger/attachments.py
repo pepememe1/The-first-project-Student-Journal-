@@ -417,11 +417,15 @@ def chat_saved(conv_id: str, user: User = Depends(get_current_user),
     out = []
     for m in rows:
         u = authors.get(m.fwd_from_sender_id)
+        #Изображение — подписанной ссылкой, как в ленте (`_msg_out`): иначе вкладка несла
+        #бы data:URL каждой сохранённой картинки целиком (нашёл Полковник 28.10.2026).
+        body = (media_refs.ref_url("m", str(m.id), m.body or "")
+                if (m.kind or "") == "image" else m.body)
         if u is not None and _masked_for(u, user):
             #Модератор — номером и здесь (Полковник, 21.10.2026): ни id, ни фамилии,
             #ни аватарки (её адрес несёт настоящий id).
             out.append({
-                "message_id": m.id, "body": m.body, "kind": m.kind,
+                "message_id": m.id, "body": body, "kind": m.kind,
                 "sent_at": m.fwd_from_created_at or m.created_at, "saved_at": m.created_at,
                 "from_id": moderator_alias(u), "from_name": moderator_display_name(u),
                 "from_role": "moderator", "from_avatar": "", "from_color": "",
@@ -429,7 +433,7 @@ def chat_saved(conv_id: str, user: User = Depends(get_current_user),
             continue
         prefs = (u.prefs if u is not None and isinstance(u.prefs, dict) else {})
         out.append({
-            "message_id": m.id, "body": m.body, "kind": m.kind,
+            "message_id": m.id, "body": body, "kind": m.kind,
             #ДВЕ разных метки, и путать их нельзя: `sent_at` — когда автор написал
             #сообщение в беседе (её и показываем, о ней спрашивают «время отправки»),
             #`saved_at` — когда читатель унёс его к себе. У старых строк снимка времени

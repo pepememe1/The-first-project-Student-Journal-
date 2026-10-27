@@ -6,6 +6,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { adminApi, scheduleApi, termsApi } from '@/api/endpoints'
 import AppButton from '@/components/ui/AppButton.vue'
+import EditorShell from '@/components/ui/EditorShell.vue'
 import TeacherSuggestionsDialog from '@/components/admin/TeacherSuggestionsDialog.vue'
 import InviteDialog from '@/components/admin/InviteDialog.vue'
 import Badge from '@/components/ui/Badge.vue'
@@ -557,239 +558,231 @@ async function importParsed() {
     </StickyXScroll>
 
     <!-- ── Учебные часы группы ─────────────────────────────────────────────────── -->
-    <div v-dialog v-if="showHours" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showHours = false">
-      <div class="w-full max-w-lg rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.hoursModalTitle', { group: hoursGroup }) }}</h3>
-        <p class="mb-4 mt-1 text-xs text-text3">
-          {{ locale.t('adminGroups.hoursExplain', 'Часы на семестр по каждому предмету. Пройденное считается по лекциям и практикам (одно занятие — 2 академических часа); домашние задания в часы не входят.') }}
-          <span v-if="hoursTerm"> {{ locale.t('adminGroups.hoursPeriodLabel', { year: hoursTerm.year, season: seasonLabel(hoursTerm.semester) }) }}</span>
-        </p>
+    <EditorShell v-if="showHours" :title="locale.t('adminGroups.hoursModalTitle', { group: hoursGroup })" icon="hours" size="lg"
+                 @close="showHours = false">
+      <p class="mb-4 mt-1 text-xs text-text3">
+        {{ locale.t('adminGroups.hoursExplain', 'Часы на семестр по каждому предмету. Пройденное считается по лекциям и практикам (одно занятие — 2 академических часа); домашние задания в часы не входят.') }}
+        <span v-if="hoursTerm"> {{ locale.t('adminGroups.hoursPeriodLabel', { year: hoursTerm.year, season: seasonLabel(hoursTerm.semester) }) }}</span>
+      </p>
 
-        <p v-if="hoursLoading" class="py-6 text-center text-sm text-text3">{{ locale.t('common.loading') }}</p>
-        <p v-else-if="!hoursRows.length" class="py-6 text-center text-sm text-text3">
-          {{ locale.t('adminGroups.hoursNoSubjects', 'У группы нет предметов — сначала задайте их кнопкой с карандашом.') }}
-        </p>
-        <div v-else class="max-h-80 space-y-2 overflow-y-auto">
-          <div v-for="r in hoursRows" :key="r.subject"
-               class="rounded-sm border border-border2 px-2 py-1.5 hover:bg-bg2">
-            <div class="flex items-center gap-3">
-              <span class="min-w-0 flex-1 truncate text-sm text-text" :title="r.subject">{{ r.subject }}</span>
-              <span class="shrink-0 text-xs text-text3">{{ locale.t('adminGroups.hoursDoneLabel', { n: r.hours_done }) }}</span>
-              <input v-model.number="r.hours_total" type="number" min="0" step="2"
-                     class="h-9 w-24 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-sm text-text outline-none focus:border-accent" />
+      <p v-if="hoursLoading" class="py-6 text-center text-sm text-text3">{{ locale.t('common.loading') }}</p>
+      <p v-else-if="!hoursRows.length" class="py-6 text-center text-sm text-text3">
+        {{ locale.t('adminGroups.hoursNoSubjects', 'У группы нет предметов — сначала задайте их кнопкой с карандашом.') }}
+      </p>
+      <div v-else class="max-h-80 space-y-2 overflow-y-auto">
+        <div v-for="r in hoursRows" :key="r.subject"
+             class="rounded-sm border border-border2 px-2 py-1.5 hover:bg-bg2">
+          <div class="flex items-center gap-3">
+            <span class="min-w-0 flex-1 truncate text-sm text-text" :title="r.subject">{{ r.subject }}</span>
+            <span class="shrink-0 text-xs text-text3">{{ locale.t('adminGroups.hoursDoneLabel', { n: r.hours_done }) }}</span>
+            <input v-model.number="r.hours_total" type="number" min="0" step="2"
+                   class="h-9 w-24 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-sm text-text outline-none focus:border-accent" />
+          </div>
+          <!-- ЗЕТ (docs/done/PLAN-ZET.md): подсказка zet_hint — СЕРАЯ, только placeholder,
+               автоматом никогда не сохраняется, пока администратор явно не впишет число. -->
+          <div class="mt-1.5 flex items-center gap-2">
+            <span class="shrink-0 text-xs text-text3">{{ locale.t('adminGroups.zetLabel', 'ЗЕТ') }}</span>
+            <input v-model="r.zet" type="number" min="0" step="0.1"
+                   :placeholder="r.zet_hint ? String(r.zet_hint) : ''"
+                   class="h-8 w-20 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-xs text-text outline-none placeholder:text-text3 focus:border-accent" />
+            <span v-if="r.zet_hint" class="text-[11px] text-text3">{{ locale.t('adminGroups.zetHintFormula', { hint: r.zet_hint }) }}</span>
+          </div>
+          <!-- §ролей: препод, ведущий эту группу по этому предмету — единственный
+               источник правды «какие группы видит препод» (webdata.teacher_assignments). -->
+          <select v-model="r.teacher_id"
+                  class="mt-1.5 h-8 w-full rounded-sm border border-border2 bg-card2 px-2 text-xs text-text2 outline-none focus:border-accent">
+            <option value="">{{ locale.t('adminGroups.teacherNotAssigned', '— преподаватель не назначен —') }}</option>
+            <option v-for="t in teachersFor(r.subject)" :key="t.id" :value="t.id">{{ t.name }}</option>
+          </select>
+          <p v-if="!teachersFor(r.subject).length" class="mt-1 text-[11px] text-text3">
+            {{ locale.t('adminGroups.noTeachersForSubject', { subject: r.subject }) }}
+          </p>
+          <!-- Раздельное обучение (§ролей, 3.6.1) — флаг ставит куратор во вкладке
+               «Курирование», здесь только читаем его и, если он стоит, даём занять
+               ВТОРОГО преподавателя (подгруппа 2). Пусто — обе подгруппы у teacher_id. -->
+          <template v-if="r.split">
+            <div class="mt-1.5 flex items-center gap-1.5 text-[11px] text-accent">
+              <GbIcon name="group" class="size-3.5 shrink-0" /><span>{{ locale.t('adminGroups.splitBadge', 'раздельное обучение') }}</span>
             </div>
-            <!-- ЗЕТ (docs/done/PLAN-ZET.md): подсказка zet_hint — СЕРАЯ, только placeholder,
-                 автоматом никогда не сохраняется, пока администратор явно не впишет число. -->
-            <div class="mt-1.5 flex items-center gap-2">
-              <span class="shrink-0 text-xs text-text3">{{ locale.t('adminGroups.zetLabel', 'ЗЕТ') }}</span>
-              <input v-model="r.zet" type="number" min="0" step="0.1"
-                     :placeholder="r.zet_hint ? String(r.zet_hint) : ''"
-                     class="h-8 w-20 shrink-0 rounded-sm border border-border2 bg-card2 px-2 text-right text-xs text-text outline-none placeholder:text-text3 focus:border-accent" />
-              <span v-if="r.zet_hint" class="text-[11px] text-text3">{{ locale.t('adminGroups.zetHintFormula', { hint: r.zet_hint }) }}</span>
-            </div>
-            <!-- §ролей: препод, ведущий эту группу по этому предмету — единственный
-                 источник правды «какие группы видит препод» (webdata.teacher_assignments). -->
-            <select v-model="r.teacher_id"
-                    class="mt-1.5 h-8 w-full rounded-sm border border-border2 bg-card2 px-2 text-xs text-text2 outline-none focus:border-accent">
-              <option value="">{{ locale.t('adminGroups.teacherNotAssigned', '— преподаватель не назначен —') }}</option>
+            <select v-model="r.teacher_id_2"
+                    class="mt-1 h-8 w-full rounded-sm border border-border2 bg-card2 px-2 text-xs text-text2 outline-none focus:border-accent">
+              <option value="">{{ locale.t('adminGroups.subgroup2NotAssigned', '— подгруппа 2: тот же преподаватель —') }}</option>
               <option v-for="t in teachersFor(r.subject)" :key="t.id" :value="t.id">{{ t.name }}</option>
             </select>
-            <p v-if="!teachersFor(r.subject).length" class="mt-1 text-[11px] text-text3">
-              {{ locale.t('adminGroups.noTeachersForSubject', { subject: r.subject }) }}
-            </p>
-            <!-- Раздельное обучение (§ролей, 3.6.1) — флаг ставит куратор во вкладке
-                 «Курирование», здесь только читаем его и, если он стоит, даём занять
-                 ВТОРОГО преподавателя (подгруппа 2). Пусто — обе подгруппы у teacher_id. -->
-            <template v-if="r.split">
-              <div class="mt-1.5 flex items-center gap-1.5 text-[11px] text-accent">
-                <GbIcon name="group" class="size-3.5 shrink-0" /><span>{{ locale.t('adminGroups.splitBadge', 'раздельное обучение') }}</span>
-              </div>
-              <select v-model="r.teacher_id_2"
-                      class="mt-1 h-8 w-full rounded-sm border border-border2 bg-card2 px-2 text-xs text-text2 outline-none focus:border-accent">
-                <option value="">{{ locale.t('adminGroups.subgroup2NotAssigned', '— подгруппа 2: тот же преподаватель —') }}</option>
-                <option v-for="t in teachersFor(r.subject)" :key="t.id" :value="t.id">{{ t.name }}</option>
-              </select>
-            </template>
-          </div>
-        </div>
-
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showHours = false">{{ locale.t('common.cancel') }}</AppButton>
-          <AppButton variant="green" size="sm" :disabled="hoursSaving || hoursLoading || !hoursRows.length" @click="saveHours">
-            {{ hoursSaving ? locale.t('adminGroups.savingBtn', 'Сохранение…') : locale.t('common.save') }}
-          </AppButton>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── Импорт специальности/учебного плана ВСГУТУ ─────────────────────────────── -->
-    <div v-dialog v-if="showImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showImport = false">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.importEsstuModalTitle', { group: importGroup }) }}</h3>
-        <p class="mb-4 mt-1 text-xs text-text3">
-          {{ locale.t('adminGroups.importEsstuExplain', 'Подтягивает учебный план специальности и заносит в группу предметы+часы+ЗЕТ ИМЕННО текущего курса/семестра (считается от года поступления). Список предметов группы будет ЗАМЕНЁН — как при обновлении «Из расписания».') }}
-        </p>
-
-        <template v-if="!importResult">
-          <p v-if="importLoadingList" class="py-6 text-center text-sm text-text3">{{ locale.t('adminGroups.loadingSpecialties', 'Загрузка специальностей…') }}</p>
-          <div v-else class="space-y-3">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.specialtyLabel', 'Специальность') }}</span>
-              <select v-model="importForm.specialty_code"
-                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-                <option value="">{{ locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
-                <option v-for="s in importSpecialties" :key="s.code" :value="s.code">{{ s.code }} — {{ s.name }}</option>
-              </select>
-              <p v-if="!importSpecialties.length" class="mt-1 text-xs text-red">
-                {{ locale.t('adminGroups.specialtiesUnavailable', 'Список специальностей недоступен (сайт ВСГУТУ не ответил) — попробуйте позже.') }}
-              </p>
-            </label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.enrollmentYearLabel', 'Год поступления') }}</span>
-              <select v-model.number="importForm.enrollment_year" :disabled="!importForm.specialty_code || importLoadingYears"
-                      class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-50">
-                <option value="">{{ importLoadingYears ? locale.t('adminGroups.loadingPlaceholder', '— загрузка… —') : locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
-                <option v-for="y in importYears" :key="y" :value="y">{{ y }}</option>
-              </select>
-              <p v-if="importForm.specialty_code && !importLoadingYears && !importYears.length"
-                 class="mt-1 text-xs text-red">
-                {{ locale.t('adminGroups.noPlansForSpecialty', 'Для этой специальности на сайте нет опубликованных планов.') }}
-              </p>
-            </label>
-            <p v-if="importError" class="text-sm text-red">{{ importError }}</p>
-          </div>
-        </template>
-
-        <!-- Сводка после успешного импорта — что именно подтянулось. -->
-        <div v-else class="space-y-2 text-sm">
-          <p class="text-text">{{ locale.t('adminGroups.importResultCourseText', 'Курс') }} <b>{{ importResult.course }}</b>,
-            {{ locale.t('adminGroups.importResultSemesterText', 'семестр с начала обучения') }}
-            <b>{{ importResult.semester }}</b> {{ locale.t('adminGroups.currentPeriodParenthetical', { year: importResult.term.year, season: seasonLabel(importResult.term.semester) }) }}.</p>
-          <p class="text-text2">{{ locale.t('adminGroups.importResultSubjectsCountText', 'Предметов с часами этого семестра:') }} <b>{{ importResult.imported.length }}</b></p>
-          <div v-if="importResult.imported.length" class="flex flex-wrap gap-1.5">
-            <Badge v-for="s in importResult.imported" :key="s" variant="green">{{ s }}</Badge>
-          </div>
-          <template v-if="importResult.unmapped.length">
-            <p class="pt-1 text-text2">{{ locale.t('adminGroups.importResultUnmappedText', 'Добавлены без часов (не удалось определить семестр в плане — задайте часы вручную кнопкой с часами):') }}</p>
-            <div class="flex flex-wrap gap-1.5">
-              <Badge v-for="s in importResult.unmapped" :key="s" variant="muted">{{ s }}</Badge>
-            </div>
           </template>
         </div>
-
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showImport = false">{{ importResult ? locale.t('common.close') : locale.t('common.cancel') }}</AppButton>
-          <AppButton v-if="!importResult" variant="green" size="sm"
-                    :disabled="importSaving || importLoadingList || !importSpecialties.length" @click="runImport">
-            {{ importSaving ? locale.t('adminGroups.importingBtn', 'Импорт…') : locale.t('adminGroups.importBtn', 'Импортировать') }}
-          </AppButton>
-        </div>
       </div>
-    </div>
+
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showHours = false">{{ locale.t('common.cancel') }}</AppButton>
+        <AppButton variant="green" size="sm" :disabled="hoursSaving || hoursLoading || !hoursRows.length" @click="saveHours">
+          {{ hoursSaving ? locale.t('adminGroups.savingBtn', 'Сохранение…') : locale.t('common.save') }}
+        </AppButton>
+      </template>
+    </EditorShell>
+
+    <!-- ── Импорт специальности/учебного плана ВСГУТУ ─────────────────────────────── -->
+    <EditorShell v-if="showImport" :title="locale.t('adminGroups.importEsstuModalTitle', { group: importGroup })" icon="importPlan"
+                 @close="showImport = false">
+      <p class="mb-4 mt-1 text-xs text-text3">
+        {{ locale.t('adminGroups.importEsstuExplain', 'Подтягивает учебный план специальности и заносит в группу предметы+часы+ЗЕТ ИМЕННО текущего курса/семестра (считается от года поступления). Список предметов группы будет ЗАМЕНЁН — как при обновлении «Из расписания».') }}
+      </p>
+
+      <template v-if="!importResult">
+        <p v-if="importLoadingList" class="py-6 text-center text-sm text-text3">{{ locale.t('adminGroups.loadingSpecialties', 'Загрузка специальностей…') }}</p>
+        <div v-else class="space-y-3">
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.specialtyLabel', 'Специальность') }}</span>
+            <select v-model="importForm.specialty_code"
+                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+              <option value="">{{ locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
+              <option v-for="s in importSpecialties" :key="s.code" :value="s.code">{{ s.code }} — {{ s.name }}</option>
+            </select>
+            <p v-if="!importSpecialties.length" class="mt-1 text-xs text-red">
+              {{ locale.t('adminGroups.specialtiesUnavailable', 'Список специальностей недоступен (сайт ВСГУТУ не ответил) — попробуйте позже.') }}
+            </p>
+          </label>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.enrollmentYearLabel', 'Год поступления') }}</span>
+            <select v-model.number="importForm.enrollment_year" :disabled="!importForm.specialty_code || importLoadingYears"
+                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-50">
+              <option value="">{{ importLoadingYears ? locale.t('adminGroups.loadingPlaceholder', '— загрузка… —') : locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
+              <option v-for="y in importYears" :key="y" :value="y">{{ y }}</option>
+            </select>
+            <p v-if="importForm.specialty_code && !importLoadingYears && !importYears.length"
+               class="mt-1 text-xs text-red">
+              {{ locale.t('adminGroups.noPlansForSpecialty', 'Для этой специальности на сайте нет опубликованных планов.') }}
+            </p>
+          </label>
+          <p v-if="importError" class="text-sm text-red">{{ importError }}</p>
+        </div>
+      </template>
+
+      <!-- Сводка после успешного импорта — что именно подтянулось. -->
+      <div v-else class="space-y-2 text-sm">
+        <p class="text-text">{{ locale.t('adminGroups.importResultCourseText', 'Курс') }} <b>{{ importResult.course }}</b>,
+          {{ locale.t('adminGroups.importResultSemesterText', 'семестр с начала обучения') }}
+          <b>{{ importResult.semester }}</b> {{ locale.t('adminGroups.currentPeriodParenthetical', { year: importResult.term.year, season: seasonLabel(importResult.term.semester) }) }}.</p>
+        <p class="text-text2">{{ locale.t('adminGroups.importResultSubjectsCountText', 'Предметов с часами этого семестра:') }} <b>{{ importResult.imported.length }}</b></p>
+        <div v-if="importResult.imported.length" class="flex flex-wrap gap-1.5">
+          <Badge v-for="s in importResult.imported" :key="s" variant="green">{{ s }}</Badge>
+        </div>
+        <template v-if="importResult.unmapped.length">
+          <p class="pt-1 text-text2">{{ locale.t('adminGroups.importResultUnmappedText', 'Добавлены без часов (не удалось определить семестр в плане — задайте часы вручную кнопкой с часами):') }}</p>
+          <div class="flex flex-wrap gap-1.5">
+            <Badge v-for="s in importResult.unmapped" :key="s" variant="muted">{{ s }}</Badge>
+          </div>
+        </template>
+      </div>
+
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showImport = false">{{ importResult ? locale.t('common.close') : locale.t('common.cancel') }}</AppButton>
+        <AppButton v-if="!importResult" variant="green" size="sm"
+                  :disabled="importSaving || importLoadingList || !importSpecialties.length" @click="runImport">
+          {{ importSaving ? locale.t('adminGroups.importingBtn', 'Импорт…') : locale.t('adminGroups.importBtn', 'Импортировать') }}
+        </AppButton>
+      </template>
+    </EditorShell>
 
     <!-- ── Импорт группы по категории расписания ──────────────────────────────────── -->
-    <div v-dialog v-if="showScheduleImport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showScheduleImport = false">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="font-title text-lg font-bold text-text">{{ locale.t('adminGroups.scheduleImportModalTitle', 'Импорт группы по категории') }}</h3>
-        <p class="mb-4 mt-1 text-xs text-text3">
-          {{ locale.t('adminGroups.scheduleImportExplain', 'Заводит группу как каталожную запись, связанную с расписанием портала. Предметы подставятся из её расписания; часов/учебного плана/журнала для этой категории нет (для колледжа их даёт «Добавить группу» / «Обновить группы»).') }}
-        </p>
-        <div class="space-y-3">
-          <!-- 🎓 Курс и год поступления — одно число в двух видах: правишь одно, второе
-               пересчитывается. Хранится ГОД (курс растёт сам по календарю), но вводить
-               удобнее КУРС — его администратор знает про группу сразу. -->
-          <div class="grid grid-cols-2 gap-2">
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.courseLabel', 'Курс') }}</span>
-              <input type="number" min="1" max="6" :value="form.course" :disabled="!!editing"
-                     @input="onCourseInput($event.target.value)"
-                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" />
-            </label>
-            <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.enrollmentYearLabel', 'Год поступления') }}</span>
-              <input type="number" min="2000" max="2100" :value="form.enrollment_year" :disabled="!!editing"
-                     @input="onYearInput($event.target.value)"
-                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" />
-            </label>
-          </div>
-          <!-- 📚 Программа обучения подтягивается САМА по коду специальности из учебного
-               плана ВСГУТУ. Поле необязательное: без него группа заводится как раньше, с
-               ручным списком предметов ниже. -->
-          <label v-if="!editing" class="block">
-            <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.specialtyLabel', 'Код специальности') }}</span>
-            <input v-model="form.specialty_code" placeholder="09.02.07"
-                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
-            <span class="mt-1 block text-tiny text-text3">{{ locale.t('adminGroups.specialtyHint', 'Заполните — предметы и часы подтянутся из учебного плана') }}</span>
-          </label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.categoryLabel', 'Категория') }}</span>
-            <select v-model="scheduleImportCategory"
-                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-              <option v-for="c in nonCollegeCategories" :key="c.key" :value="c.key">{{ c.label }}</option>
-            </select>
-          </label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.groupFromPortalLabel', 'Группа (с портала)') }}</span>
-            <select v-model="scheduleImportGroupName" :disabled="scheduleImportLoadingGroups || !scheduleImportGroups.length"
-                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-50">
-              <option value="">{{ scheduleImportLoadingGroups ? locale.t('adminGroups.loadingPlaceholder', '— загрузка… —') : locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
-              <option v-if="scheduleImportGroups.length" :value="SCHEDULE_IMPORT_ALL">
-                {{ locale.t('adminGroups.allGroupsOption', { n: scheduleImportGroups.length }) }}
-              </option>
-              <option v-for="n in scheduleImportGroups" :key="n" :value="n">{{ n }}</option>
-            </select>
-            <p v-if="!scheduleImportLoadingGroups && scheduleImportCategory && !scheduleImportGroups.length"
-               class="mt-1 text-xs text-red">
-              {{ locale.t('adminGroups.noPortalDataForCategory', 'Нет данных с портала для этой категории (сайт недоступен либо снимок ещё не собран).') }}
-            </p>
-            <p v-if="scheduleImportGroupName === SCHEDULE_IMPORT_ALL" class="mt-1 text-xs text-text3">
-              {{ locale.t('adminGroups.scheduleImportAllHint', 'Заведёт каталожные записи для ВСЕХ групп категории разом (может занять минуту на первый снимок — уже существующие группы не трогает).') }}
-            </p>
-          </label>
-          <p v-if="scheduleImportError" class="text-sm text-red">{{ scheduleImportError }}</p>
-        </div>
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showScheduleImport = false">{{ locale.t('common.cancel') }}</AppButton>
-          <AppButton variant="green" size="sm"
-                    :disabled="scheduleImportSaving || !scheduleImportGroupName" @click="runScheduleImport">
-            {{ scheduleImportSaving ? locale.t('adminGroups.importingBtn', 'Импорт…') : locale.t('adminGroups.importBtn', 'Импортировать') }}
-          </AppButton>
-        </div>
-      </div>
-    </div>
-
-    <div v-dialog v-if="showForm" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showForm = false">
-      <div class="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-card">
-        <h3 class="mb-4 font-title text-lg font-bold text-text">{{ editing ? locale.t('adminGroups.editGroupTitle', 'Изменить группу') : locale.t('adminGroups.addGroupTitle', 'Добавить группу') }}</h3>
-        <div class="space-y-3">
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.nameLabel', 'Название') }}</span>
-            <input v-model="form.name" :disabled="!!editing" list="grp-parsed" :placeholder="locale.t('adminGroups.namePlaceholder', 'Выберите или введите')"
+    <EditorShell v-if="showScheduleImport" :title="locale.t('adminGroups.scheduleImportModalTitle', 'Импорт группы по категории')" icon="calendar"
+                 @close="showScheduleImport = false">
+      <p class="mb-4 mt-1 text-xs text-text3">
+        {{ locale.t('adminGroups.scheduleImportExplain', 'Заводит группу как каталожную запись, связанную с расписанием портала. Предметы подставятся из её расписания; часов/учебного плана/журнала для этой категории нет (для колледжа их даёт «Добавить группу» / «Обновить группы»).') }}
+      </p>
+      <div class="space-y-3">
+        <!-- 🎓 Курс и год поступления — одно число в двух видах: правишь одно, второе
+             пересчитывается. Хранится ГОД (курс растёт сам по календарю), но вводить
+             удобнее КУРС — его администратор знает про группу сразу. -->
+        <div class="grid grid-cols-2 gap-2">
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.courseLabel', 'Курс') }}</span>
+            <input type="number" min="1" max="6" :value="form.course" :disabled="!!editing"
+                   @input="onCourseInput($event.target.value)"
                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" />
-            <datalist id="grp-parsed"><option v-for="n in parsedGroups" :key="n" :value="n" /></datalist>
           </label>
-          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.categoryLabel', 'Категория') }}</span>
-            <select v-model="form.category"
-                    class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
-              <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.label }}</option>
-            </select>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.enrollmentYearLabel', 'Год поступления') }}</span>
+            <input type="number" min="2000" max="2100" :value="form.enrollment_year" :disabled="!!editing"
+                   @input="onYearInput($event.target.value)"
+                   class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" />
           </label>
-          <div>
-            <div class="mb-1 flex items-center justify-between">
-              <span class="block text-tiny uppercase text-text3">{{ locale.t('adminGroups.subjectsLabel', 'Предметы группы') }}</span>
-              <button v-if="form.subjects.length" type="button" class="text-tiny text-text3 hover:text-red hover:underline" @click="clearSubjects">
-                {{ locale.t('adminGroups.clearSubjects', 'убрать все') }}
-              </button>
-            </div>
-            <div class="max-h-48 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
-              <label v-for="s in allSubjects" :key="s" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
-                <input type="checkbox" :checked="form.subjects.includes(s)" @change="toggleSubject(s)" />
-                {{ s }}
-              </label>
-              <p v-if="!allSubjects.length" class="px-1 py-2 text-xs text-text3">{{ locale.t('adminGroups.noSubjectsCatalogHint', 'Сначала заведите предметы во вкладке «Предметы».') }}</p>
-            </div>
-          </div>
-          <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
         </div>
-        <div class="mt-5 flex justify-end gap-2">
-          <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
-          <AppButton variant="green" size="sm" :disabled="saving" @click="save">{{ saving ? locale.t('adminGroups.savingBtn', 'Сохранение…') : (editing ? locale.t('common.save') : locale.t('adminGroups.addAction2', 'Добавить')) }}</AppButton>
-        </div>
+        <!-- 📚 Программа обучения подтягивается САМА по коду специальности из учебного
+             плана ВСГУТУ. Поле необязательное: без него группа заводится как раньше, с
+             ручным списком предметов ниже. -->
+        <label v-if="!editing" class="block">
+          <span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.specialtyLabel', 'Код специальности') }}</span>
+          <input v-model="form.specialty_code" placeholder="09.02.07"
+                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent" />
+          <span class="mt-1 block text-tiny text-text3">{{ locale.t('adminGroups.specialtyHint', 'Заполните — предметы и часы подтянутся из учебного плана') }}</span>
+        </label>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.categoryLabel', 'Категория') }}</span>
+          <select v-model="scheduleImportCategory"
+                  class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+            <option v-for="c in nonCollegeCategories" :key="c.key" :value="c.key">{{ c.label }}</option>
+          </select>
+        </label>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.groupFromPortalLabel', 'Группа (с портала)') }}</span>
+          <select v-model="scheduleImportGroupName" :disabled="scheduleImportLoadingGroups || !scheduleImportGroups.length"
+                  class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-50">
+            <option value="">{{ scheduleImportLoadingGroups ? locale.t('adminGroups.loadingPlaceholder', '— загрузка… —') : locale.t('adminGroups.selectPlaceholder', '— выберите —') }}</option>
+            <option v-if="scheduleImportGroups.length" :value="SCHEDULE_IMPORT_ALL">
+              {{ locale.t('adminGroups.allGroupsOption', { n: scheduleImportGroups.length }) }}
+            </option>
+            <option v-for="n in scheduleImportGroups" :key="n" :value="n">{{ n }}</option>
+          </select>
+          <p v-if="!scheduleImportLoadingGroups && scheduleImportCategory && !scheduleImportGroups.length"
+             class="mt-1 text-xs text-red">
+            {{ locale.t('adminGroups.noPortalDataForCategory', 'Нет данных с портала для этой категории (сайт недоступен либо снимок ещё не собран).') }}
+          </p>
+          <p v-if="scheduleImportGroupName === SCHEDULE_IMPORT_ALL" class="mt-1 text-xs text-text3">
+            {{ locale.t('adminGroups.scheduleImportAllHint', 'Заведёт каталожные записи для ВСЕХ групп категории разом (может занять минуту на первый снимок — уже существующие группы не трогает).') }}
+          </p>
+        </label>
+        <p v-if="scheduleImportError" class="text-sm text-red">{{ scheduleImportError }}</p>
       </div>
-    </div>
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showScheduleImport = false">{{ locale.t('common.cancel') }}</AppButton>
+        <AppButton variant="green" size="sm"
+                  :disabled="scheduleImportSaving || !scheduleImportGroupName" @click="runScheduleImport">
+          {{ scheduleImportSaving ? locale.t('adminGroups.importingBtn', 'Импорт…') : locale.t('adminGroups.importBtn', 'Импортировать') }}
+        </AppButton>
+      </template>
+    </EditorShell>
+
+    <EditorShell v-if="showForm" :title="editing ? locale.t('adminGroups.editGroupTitle', 'Изменить группу') : locale.t('adminGroups.addGroupTitle', 'Добавить группу')" :icon="editing ? 'edit' : 'add'"
+                 @close="showForm = false">
+      <div class="space-y-3">
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.nameLabel', 'Название') }}</span>
+          <input v-model="form.name" :disabled="!!editing" list="grp-parsed" :placeholder="locale.t('adminGroups.namePlaceholder', 'Выберите или введите')"
+                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent disabled:opacity-60" />
+          <datalist id="grp-parsed"><option v-for="n in parsedGroups" :key="n" :value="n" /></datalist>
+        </label>
+        <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('adminGroups.categoryLabel', 'Категория') }}</span>
+          <select v-model="form.category"
+                  class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent">
+            <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.label }}</option>
+          </select>
+        </label>
+        <div>
+          <div class="mb-1 flex items-center justify-between">
+            <span class="block text-tiny uppercase text-text3">{{ locale.t('adminGroups.subjectsLabel', 'Предметы группы') }}</span>
+            <button v-if="form.subjects.length" type="button" class="text-tiny text-text3 hover:text-red hover:underline" @click="clearSubjects">
+              {{ locale.t('adminGroups.clearSubjects', 'убрать все') }}
+            </button>
+          </div>
+          <div class="max-h-48 overflow-y-auto rounded-sm border border-border2 bg-card2 p-2">
+            <label v-for="s in allSubjects" :key="s" class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm text-text hover:bg-bg2">
+              <input type="checkbox" :checked="form.subjects.includes(s)" @change="toggleSubject(s)" />
+              {{ s }}
+            </label>
+            <p v-if="!allSubjects.length" class="px-1 py-2 text-xs text-text3">{{ locale.t('adminGroups.noSubjectsCatalogHint', 'Сначала заведите предметы во вкладке «Предметы».') }}</p>
+          </div>
+        </div>
+        <p v-if="formError" class="text-sm text-red">{{ formError }}</p>
+      </div>
+      <template #footer>
+        <AppButton variant="ghost" size="sm" @click="showForm = false">{{ locale.t('common.cancel') }}</AppButton>
+        <AppButton variant="green" size="sm" :disabled="saving" @click="save">{{ saving ? locale.t('adminGroups.savingBtn', 'Сохранение…') : (editing ? locale.t('common.save') : locale.t('adminGroups.addAction2', 'Добавить')) }}</AppButton>
+      </template>
+    </EditorShell>
   </div>
 
   <TeacherSuggestionsDialog v-if="showTeacherSuggest"

@@ -671,6 +671,12 @@ def admin_create_student(payload: dict = Body(...),
     existing = db.get(User, sid)
     if existing is not None and not existing.deleted:
         raise HTTPException(status_code=409, detail="Студент с таким логином уже есть")
+    #🔒 Тот же замок на «восстановлении» удалённого: строка переиспользуется, и пароль,
+    #вписанный здесь, стал бы выданным колледжем поверх своего пароля студента.
+    if existing is not None and password:
+        from ... import password_recovery
+        if password_recovery.owned_by_student(db, existing):
+            raise password_recovery.owned_refusal()
     _refuse_taken_login(db, login, sid)
     _ensure_group_row(db, group)
     row = existing or User(id=sid)
@@ -759,6 +765,18 @@ def admin_update_student(login: str, payload: dict = Body(...), sid: str = Query
     Студента без логина клиент правит по `sid`, в пути тогда заглушка «-»."""
     row = _student_for_write(db, login, sid)
     login = row.login or row.id
+    #🔒 Пароль студента, который привязал почту колледжа и сменил пароль сам, отсюда не
+    #сменить — проверка ДО любой правки: отказ не должен оставить половину изменений.
+    #Без неё поле «Новый пароль» в редакторе обходило весь замок (`password_recovery`,
+    #нашёл Полковник 28.10.2026): пароль снова «выданный», замок снят, почту колледжа
+    #можно подменить. ФИО, группу и дату рождения править можно — на них вход не держится.
+    if payload.get("password"):
+        from ... import password_recovery
+        if password_recovery.owned_by_student(db, row):
+            audit.log(db, actor=_admin.login, role="admin", action="credentials.set.reject",
+                      target=login, level="warn",
+                      detail="пароль не изменён: учётка принадлежит студенту")
+            raise password_recovery.owned_refusal()
     old_f, old_n = row.surname or "", row.name or ""
     from ... import person_rules as PR
     bad = PR.first_problem(

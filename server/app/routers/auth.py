@@ -849,6 +849,53 @@ def _send_reset_link(email: str, token: str) -> bool:
     return True
 
 
+#━━ ВОССТАНОВЛЕНИЕ КОДОМ ИЗ ПИСЬМА (27.10.2026, требование Влада) ━━━━━━━━━━━━━━━━━━━━━━
+#Кнопка «Забыли пароль?» на странице входа появляется после двух неудачных попыток.
+#Код уходит только на почту, совпадающую и со своей подтверждённой, и с записью
+#колледжа; верный код выдаёт одноразовый ключ, а пароль меняет `/recover/confirm` —
+#та же дверь, что у ссылки из письма. Устройство и причины — `password_recovery.py`.
+
+@router.post("/recover/code/start")
+def recover_code_start(body: dict = Body(...), request: Request = None,
+                       db: Session = Depends(get_db)):
+    """Запросить код восстановления. Ответ ВСЕГДА одинаковый — по телу и по времени."""
+    started = time.monotonic()
+    ip = throttle.client_ip(request) if request is not None else ""
+    left = throttle.seconds_until_reg_unlocked(ip)
+    if left:
+        raise HTTPException(status_code=429,
+                            detail=f"Слишком много запросов. Подождите {left // 60 + 1} мин.")
+    #Каждый запрос приближает лимит адреса — тот же, что у `/recover`: с одного адреса
+    #нельзя разослать коды по списку логинов.
+    throttle.register_reg_failure(ip)
+    from .. import password_recovery
+    login = str(body.get("login") or "").strip()
+    outcome = password_recovery.start(db, login, str(body.get("email") or ""))
+    #Причина — только в журнал (его читает администратор), ответу она не достаётся.
+    audit.log(db, request, actor=login[:120], action="password.recover_code",
+              detail=outcome)
+    _uniform_delay(started)
+    return {"ok": True}
+
+
+@router.post("/recover/code/verify")
+def recover_code_verify(body: dict = Body(...), request: Request = None,
+                        db: Session = Depends(get_db)):
+    """Проверить код. Верный — одноразовый ключ для `/recover/confirm`."""
+    from .. import password_recovery
+    login = str(body.get("login") or "").strip()
+    try:
+        token = password_recovery.verify(db, login, str(body.get("code") or ""), request)
+    except HTTPException as e:
+        if e.status_code == 400:
+            audit.log(db, request, actor=login[:120], action="password.recover_code.reject",
+                      level="warn", detail="код не подошёл или истёк")
+        raise
+    audit.log(db, request, actor=login, action="password.recover_code.ok",
+              detail="код подтверждён, выдан ключ смены пароля")
+    return {"ok": True, "token": token}
+
+
 @router.post("/recover/confirm")
 def recover_confirm(body: dict = Body(...), request: Request = None,
                     db: Session = Depends(get_db)):
@@ -939,7 +986,7 @@ def recover_confirm(body: dict = Body(...), request: Request = None,
     #вкладки обязан оборваться вместе с токеном, а не дожить до конца срока.
     _kick_sockets(u.id)
     audit.log(db, request, actor=row.login, action="password.reset.ok",
-              detail="пароль изменён по ссылке из письма")
+              detail="пароль изменён по ссылке или коду из письма")
     #Уведомление «пароль изменён» (4.0): пуш, письмо во вкладке и на почту. Сам пароль
     #не уходит никуда. Ленивый импорт: `account` импортирует этот модуль.
     from .account import _after_password_change

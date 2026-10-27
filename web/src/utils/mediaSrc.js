@@ -9,7 +9,9 @@
  *   • гифка с CDN Klipy — внутри ПРОГРАММЫ идёт через локальный сервер
  *     (`/desk/media?u=…`), который держит её в зашифрованном кэше %TEMP%: окно программы
  *     в приватном режиме, и без этого каждая гифка качалась бы заново после каждого
- *     запуска. На сайте и в приложении — напрямую, их кэш живёт сам;
+ *     запуска. На сайте и в приложении — С НАШЕГО СЕРВЕРА (`/media/klipy/<путь>`,
+ *     27.10.2026): без VPN CDN Klipy открывается не у всех, а наш сервер до него доходит
+ *     (`server/app/klipy_media.py`);
  *   • data:URL и всё прочее — как есть.
  *
  * ⚠️ Импорты относительные, а не через `@/`: функцию проверяет `node --test` без сборщика.
@@ -21,7 +23,11 @@ import { getApiBase } from '../api/server.js'
 import { isPcProgram } from './platform.js'
 
 export const AVATAR_PATH = '/media/avatar'
+export const KLIPY_PATH = '/media/klipy/'
 const KLIPY_HOST = 'static.klipy.com'
+//Путь на CDN — тот же шаблон, что сверяет сервер (`klipy_media._PATH_RE`): по нему
+//сервер решает, скачивать ли файл, и ссылка мимо шаблона получила бы 404.
+const KLIPY_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9_\-.]*(?:\/[A-Za-z0-9][A-Za-z0-9_\-.]*){0,8}\.(gif|webp|mp4|jpg|jpeg|png)$/i
 
 /** Гифка с CDN Klipy: только https, без порта и учётных данных — как проверяет программа. */
 export function isKlipyUrl(value) {
@@ -33,12 +39,41 @@ export function isKlipyUrl(value) {
   }
 }
 
+/**
+ * Тот же файл Klipy, но с нашего сервера: `/media/klipy/<путь на CDN>` (27.10.2026).
+ * '' — не ссылка Klipy или путь не по шаблону (такую сервер не возьмёт).
+ * Адрес — от сервера, как у аватарки: в приложении страница открыта с https://localhost.
+ */
+export function klipyMirror(value) {
+  if (!isKlipyUrl(value)) return ''
+  const u = new URL(value)
+  const path = u.pathname.replace(/^\/+/, '')
+  if (u.search || path.includes('..') || !KLIPY_FILE_RE.test(path)) return ''
+  return (getApiBase() || '') + KLIPY_PATH + path
+}
+
 /** Адрес для `<img src>` по значению поля. Пустое — пустая строка. */
 export function mediaSrc(value) {
   if (!value || typeof value !== 'string') return ''
   if (value.startsWith(AVATAR_PATH + '?')) return (getApiBase() || '') + value
-  if (isKlipyUrl(value) && isPcProgram()) return '/desk/media?u=' + encodeURIComponent(value)
+  if (isKlipyUrl(value)) {
+    if (isPcProgram()) return '/desk/media?u=' + encodeURIComponent(value)
+    return klipyMirror(value) || value
+  }
   return value
+}
+
+/**
+ * Неподвижный первый кадр гифки Klipy — ЗАПАСНОЙ вид аватарки и баннера (27.10.2026,
+ * требование Влада): гифка не открылась (Klipy недоступен) — человек видит кадр, как
+ * обычную аватарку, а не пустой круг. Работает и в программе: кадр — картинка, её кэш
+ * программы принимает. Сервер держит кадры аватарок и баннеров про запас
+ * (`klipy_media.pin`). '' — не гифка Klipy.
+ */
+export function gifStillSrc(value) {
+  const webp = klipyGifAs(value, '.webp')
+  if (!webp) return ''
+  return isPcProgram() ? '/desk/media?u=' + encodeURIComponent(webp) : klipyMirror(webp)
 }
 
 /**
@@ -76,7 +111,14 @@ export function playMuted(e) {
 }
 
 function klipyVariant(value, ext) {
-  if (!isKlipyUrl(value) || isPcProgram()) return ''
+  if (isPcProgram()) return ''
+  const variant = klipyGifAs(value, ext)
+  return variant ? klipyMirror(variant) : ''
+}
+
+/** Ссылка Klipy на тот же файл в другом виде (`.mp4`, `.webp`); '' — не гифка Klipy. */
+function klipyGifAs(value, ext) {
+  if (!isKlipyUrl(value)) return ''
   const u = new URL(value)
   if (!/\.gif$/i.test(u.pathname)) return ''
   u.pathname = u.pathname.replace(/\.gif$/i, ext)

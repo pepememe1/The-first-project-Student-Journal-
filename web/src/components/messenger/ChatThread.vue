@@ -15,6 +15,7 @@ import { useMessengerStore } from '@/stores/messenger'
 import { useAuthStore } from '@/stores/auth'
 import { useTranslateStore } from '@/stores/translate'
 import GifImage from '@/components/messenger/GifImage.vue'
+import ImageViewerDialog from '@/components/messenger/ImageViewerDialog.vue'
 import { useGifStore } from '@/stores/gif'
 import { useTtsStore } from '@/stores/tts'
 import { renderMarkdownLite } from '@/utils/markdownLite'
@@ -89,6 +90,9 @@ const fileInput = ref(null)
 const pendingFile = ref(null)       //выбран, но ещё не отправлен
 const previewFile = ref(null)       //что показываем в просмотрщике
 const previewAtt = ref(null)
+//Сообщение-изображение (27.10.2026: «поделиться» аватаркой беседы) — во весь экран по
+//нажатию, тем же окном, что аватарка: там же «Скачать» и «Поделиться» дальше.
+const viewImage = ref('')
 const uploadPct = ref(0)
 const uploadLimits = ref({ configured: true, max_size: 0, ext: [] })
 
@@ -544,7 +548,7 @@ async function openExternalVideo(v) {
 // картинка, тем же приёмом, что видео выше. msg.kind==='gif' сюда не попадает —
 // у него уже есть свой <img> (тело сообщения — САМА ссылка, дублировать нечего).
 function gifEmbeds(msg) {
-  if (msg.deleted || isHiddenByIgnore(msg) || msg.kind === 'gif') return []
+  if (msg.deleted || isHiddenByIgnore(msg) || msg.kind === 'gif' || msg.kind === 'image') return []
   return extractGifLinks(msg.body)
 }
 
@@ -2234,6 +2238,14 @@ function openActivities() {
                   <Star class="size-3.5" :class="gif.isFavoriteUrl(msg.body) ? 'fill-yellow-400 text-yellow-400' : 'text-white'" />
                 </span>
               </span>
+              <!-- Изображение: тело — подписанная ссылка боя (`media_refs`, вид «m»), а не
+                   текст; через `mediaSrc`, иначе в приложении ссылка не откроется. -->
+              <button v-else-if="msg.kind === 'image'" type="button" class="block w-fit"
+                      :aria-label="locale.t('imageViewer.open', 'Открыть картинку')"
+                      @click="viewImage = msg.body">
+                <img :src="mediaSrc(msg.body)" alt="" loading="lazy" decoding="async"
+                     class="max-h-72 max-w-[min(18rem,100%)] rounded-lg object-cover" />
+              </button>
               <!-- Вложение: карточка с именем и размером. Клик — предпросмотр во вкладке
                    (PDF рисует браузер, DOCX распаковываем сами), а не скачивание: чаще
                    всего человеку нужно просто убедиться, что это тот файл. -->
@@ -2678,6 +2690,8 @@ function openActivities() {
 
     <FilePreview v-if="previewFile || previewAtt" :file="previewFile" :attachment="previewAtt"
                  @close="previewFile = null; previewAtt = null" />
+    <ImageViewerDialog v-if="viewImage" :value="viewImage" :title="activeChat?.title || ''"
+                       file-name="image" @close="viewImage = ''" />
 
     <!-- Треды: ответы на сообщение (docs/plans/MESSENGER-ADDON-PLAN-GPT-SMART.md §3.3) -->
     <div v-back-close v-if="activeThread" class="fixed inset-0 z-50 grid place-items-center p-4"

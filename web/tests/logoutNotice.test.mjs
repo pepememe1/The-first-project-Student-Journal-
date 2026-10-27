@@ -10,9 +10,11 @@
 // обратный ход.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readText } from './_readSource.mjs'
 
-const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
+//Через общую дверь: обратный ход ниже правит текст регуляркой с переводом строки, и на
+//машине, где git выложил файлы с CRLF, он не срабатывал — тест краснел при исправном коде (27.10.2026).
+const read = (rel) => readText(new URL(rel, import.meta.url))
 const APP = read('../src/App.vue')
 const AUTH = read('../src/stores/auth.js')
 const MAIN = read('../src/main.js')

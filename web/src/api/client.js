@@ -253,7 +253,11 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
     // Логин/refresh сами по себе не рефрешим — иначе бесконечный цикл.
-    if (config.url?.includes('/auth/login') || config.url?.includes('/auth/refresh')) {
+    // Восстановление пароля идёт БЕЗ сессии: его 401 («нужен код второго фактора») —
+    // ответ человеку, а не протухший токен; попытка обновить токен закончилась бы
+    // `authExpiredHandler` и сообщением «сессия истекла» на странице входа.
+    if (config.url?.includes('/auth/login') || config.url?.includes('/auth/refresh') ||
+        config.url?.includes('/auth/recover')) {
       return Promise.reject(error)
     }
     const gen = sessionGen

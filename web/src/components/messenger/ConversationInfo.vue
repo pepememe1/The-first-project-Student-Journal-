@@ -12,6 +12,7 @@ import {
          SquareKanban,
 } from '@lucide/vue'
 import AvatarCropper from '@/components/AvatarCropper.vue'
+import ImageViewerDialog from '@/components/messenger/ImageViewerDialog.vue'
 import { useMessengerStore } from '@/stores/messenger'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -320,6 +321,27 @@ async function saveAvatar(dataUrl) {
   avatarEditor.value = false
 }
 
+// ── Просмотр аватарки, как в Telegram (27.10.2026, требование Влада) ────────────────
+// Нажатие открывает картинку крупно; сверху карандаш («поменять») и меню «Удалить ·
+// Скачать · Поделиться». Картинки нет — смотреть нечего, и нажатие сразу открывает
+// редактор (у кого есть право). Смотреть могут ВСЕ участники, а не только те, кто
+// вправе менять: раньше у участника без права аватарка не нажималась вовсе.
+const avatarViewer = ref(false)
+const hasAvatar = computed(() => !!activeInfo.value?.avatar)
+function onAvatarClick() {
+  if (hasAvatar.value) avatarViewer.value = true
+  else if (canRename.value) avatarEditor.value = true
+}
+function editFromViewer() {
+  avatarViewer.value = false
+  avatarEditor.value = true
+}
+async function deleteFromViewer() {
+  if (!(await confirm({ message: locale.t('imageViewer.deleteAvatarConfirm', 'Удалить аватарку беседы? Участники снова увидят буквы названия.'),
+    okText: locale.t('imageViewer.delete', 'Удалить'), danger: true }))) return
+  if (await m.setActiveAvatar('')) avatarViewer.value = false
+}
+
 async function leave() {
   const what = kind.value === 'channel' ? locale.t('messenger.channelWord', 'канала').toLowerCase() : locale.t('messenger.groupLabel', 'группы').toLowerCase()
   if (!(await confirm({ message: locale.t('conversationInfo.confirmLeave', { what }),
@@ -379,14 +401,14 @@ function onChatAction(action) {
         <!-- Лицо беседы. У группы/канала это АВАТАРКА (её ставит owner/admin), у личного
              чата и модерации — значок типа: там лицо задаёт собеседник, и своя картинка
              поверх означала бы, что человек выглядит по-разному у разных собеседников. -->
-        <button v-if="isGroupOrChannel" type="button" :disabled="!canRename"
-                @click="avatarEditor = true"
+        <button v-if="isGroupOrChannel" type="button" :disabled="!canRename && !hasAvatar"
+                @click="onAvatarClick"
                 class="group relative grid size-10 shrink-0 place-items-center rounded-full"
-                :class="canRename ? 'cursor-pointer' : 'cursor-default'"
-                :title="canRename ? locale.t('conversationInfo.changeAvatar', 'Сменить аватарку беседы') : ''"
-                :aria-label="locale.t('conversationInfo.changeAvatar', 'Сменить аватарку беседы')">
+                :class="canRename || hasAvatar ? 'cursor-pointer' : 'cursor-default'"
+                :title="hasAvatar ? locale.t('imageViewer.open', 'Открыть аватарку') : (canRename ? locale.t('conversationInfo.changeAvatar', 'Сменить аватарку беседы') : '')"
+                :aria-label="hasAvatar ? locale.t('imageViewer.open', 'Открыть аватарку') : locale.t('conversationInfo.changeAvatar', 'Сменить аватарку беседы')">
           <Avatar :src="activeInfo?.avatar || ''" :name="title" :size="40" />
-          <span v-if="canRename"
+          <span v-if="canRename && !hasAvatar"
                 class="absolute inset-0 grid place-items-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
             <Camera class="size-4 text-white" />
           </span>
@@ -437,15 +459,22 @@ function onChatAction(action) {
 
       <div v-else class="min-h-0 flex-1 overflow-y-auto p-4">
         <!-- §D6: форма переименования -->
-        <div v-if="editing" class="mb-4 space-y-2 rounded-lg border border-border2 bg-card2 p-3">
-          <input v-model="titleDraft" :placeholder="locale.t('conversationInfo.namePlaceholder', 'Название')" maxlength="120"
-                 class="w-full rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
-          <textarea v-model="aboutDraft" :placeholder="locale.t('createChat.descOptional', 'Описание (необязательно)')" rows="2" maxlength="500"
-                    class="w-full resize-none rounded-md border border-border2 bg-card px-2.5 py-1.5 text-sm text-text outline-none focus:border-accent" />
+        <!-- Тот же вид полей, что у остальных редакторов (`gb-editor-body`, 27.10.2026):
+             подписи над полями, кольцо фокуса, кнопки — те же, что в окнах-редакторах. -->
+        <div v-if="editing" class="gb-editor-body mb-4 space-y-3 rounded-xl border border-border2 bg-card2 p-4">
+          <p class="flex items-center gap-2 text-sm font-semibold text-text">
+            <GbIcon name="edit" class="size-4 text-accent" />{{ locale.t('conversationInfo.editSection', 'Название и описание') }}
+          </p>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('conversationInfo.namePlaceholder', 'Название') }}</span>
+            <input v-model="titleDraft" maxlength="120"
+                   class="h-10 w-full rounded-sm border border-border2 bg-card px-3 text-sm text-text outline-none focus:border-accent" /></label>
+          <label class="block"><span class="mb-1 block text-tiny uppercase text-text3">{{ locale.t('createChat.descOptional', 'Описание (необязательно)') }}</span>
+            <textarea v-model="aboutDraft" rows="3" maxlength="500"
+                      class="w-full resize-none rounded-sm border border-border2 bg-card px-3 py-2 text-sm text-text outline-none focus:border-accent" /></label>
           <div class="flex justify-end gap-2">
-            <button type="button" @click="editing = false" class="rounded-md px-3 py-1.5 text-xs text-text3 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
+            <button type="button" @click="editing = false" class="h-9 rounded-lg px-3.5 text-xs text-text2 hover:bg-bg2">{{ locale.t('common.cancel') }}</button>
             <button type="button" @click="saveEdit" :disabled="!titleDraft.trim()"
-                    class="flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent2 disabled:opacity-50">
+                    class="flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-xs font-semibold text-white hover:bg-accent2 disabled:opacity-50">
               <Check class="size-3.5" />{{ locale.t('common.save') }}
             </button>
           </div>
@@ -591,7 +620,10 @@ function onChatAction(action) {
                     </span>
                     <span class="shrink-0 text-[11px] tabular-nums text-text3">{{ savedTime(it) }}</span>
                   </div>
-                  <p class="whitespace-pre-wrap break-words text-sm text-text2">{{ it.body }}</p>
+                  <!-- Картинка и гифка — картинкой: их тело — ссылка, а не текст. -->
+                  <img v-if="it.kind === 'image' || it.kind === 'gif'" :src="mediaSrc(it.body)" alt=""
+                       loading="lazy" class="max-h-40 max-w-full rounded-lg object-cover" />
+                  <p v-else class="whitespace-pre-wrap break-words text-sm text-text2">{{ it.body }}</p>
                 </div>
               </div>
             </div>
@@ -726,6 +758,9 @@ function onChatAction(action) {
            картинки не прошёл бы проверку на сервере — она одна на обе стороны. -->
       <AvatarCropper v-if="avatarEditor" :current="activeInfo?.avatar || ''"
                      @save="saveAvatar" @close="avatarEditor = false" />
+      <ImageViewerDialog v-if="avatarViewer && hasAvatar" :value="activeInfo.avatar" :title="title"
+                         :file-name="title" :can-edit="canRename" :can-delete="canRename"
+                         @edit="editFromViewer" @delete="deleteFromViewer" @close="avatarViewer = false" />
     </div>
   </div>
 </template>

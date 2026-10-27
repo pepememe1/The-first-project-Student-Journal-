@@ -139,6 +139,30 @@ def confirm_email(db, user: User) -> str:
     return own
 
 
+def admin_email_of(db, user: User) -> str:
+    """Почта, которую человек сообщил колледжу (вписал администратор). '' — не внесена."""
+    row = contact_row(db, user.id)
+    return _norm_email(_dec(row.admin_email)) if row else ""
+
+
+def matched_self_email(db, user: User) -> str:
+    """Своя ПОДТВЕРЖДЁННАЯ почта, совпадающая с записью колледжа ('' — такой нет).
+
+    🔑 Одна функция на два решения (27.10.2026, требование Влада): куда слать код
+    восстановления пароля и заперта ли учётка от администратора. Разойдись они — и
+    студенту, которому код уже приходит, администратор всё ещё мог бы сменить пароль,
+    или наоборот: учётка заперта, а восстановить её нечем.
+    ⚠️ «Совпадает» — только когда заполнены ОБЕ стороны: пустая запись колледжа это
+    «не знаем», а не согласие (`_compare`)."""
+    row = contact_row(db, user.id)
+    if row is None or not row.self_email or not row.self_email_verified_at:
+        return ""
+    own = _norm_email(_dec(row.self_email))
+    if not own or _compare(_norm_email(_dec(row.admin_email)), own) != "match":
+        return ""
+    return own
+
+
 def contact_view(db, user: User, for_admin: bool = False) -> dict:
     """Контакты для показа. `for_admin` добавляет запись колледжа и сверку."""
     row = contact_row(db, user.id)
