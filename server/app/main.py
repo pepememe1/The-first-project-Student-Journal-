@@ -188,6 +188,25 @@ async def _media_features(request: Request, call_next):
 
 
 @app.middleware("http")
+async def _maintenance_gate(request: Request, call_next):
+    """Мягкий рубильник (app/maintenance.py): пока идут работы, API отвечает 503 всем,
+    кроме входа и круга сервера у администратора. Роль — из подписанного токена; страницы
+    и статика не трогаются, экран работ рисует сама SPA."""
+    from . import maintenance
+    from .security import decode_token
+    st = maintenance.state()
+    path = request.url.path
+    if st["on"] and _is_api_path(path):
+        auth = request.headers.get("authorization", "")
+        payload = decode_token(auth[7:]) if auth[:7].lower() == "bearer " else None
+        if not maintenance.allowed(path, (payload or {}).get("role", "")):
+            return JSONResponse({"detail": st["message"], "maintenance": True},
+                                status_code=503,
+                                headers={"X-Gb-Reason": "maintenance", "Retry-After": "300"})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def _force_update(request: Request, call_next):
     """Приложение, отставшее на MAX_RELEASES_BEHIND выпусков, получает 426 и экран
     «обновите приложение» (`client_app`, решение Ярослава 27.10.2026). Адреса обновления
@@ -474,7 +493,7 @@ def download_file(fname: str):
 _API_PREFIXES = (
     "auth", "me", "web", "sync", "app", "desktop", "vector", "public", "downloads",
     "health", "docs", "openapi.json", "redoc", "media",
-    "admin/online", "admin/events", "admin/sessions",
+    "admin/online", "admin/events", "admin/sessions", "admin/maintenance",
     "connect/request", "connect/requests", "connect/status",
     "connect/verify", "connect/approve", "connect/reject",
 )

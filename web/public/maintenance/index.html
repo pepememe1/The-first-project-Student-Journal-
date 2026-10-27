@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0b1622">
+<title>GradeBookAI — технические работы</title>
+<style>
+  /* Одна страница на оба рубильника (решение Ярослава 27.10.2026). Жёсткий — её отдаёт
+     сам Caddy вместо всего сайта; мягкий — сайт переводит сюда всех, кроме администратора
+     (stores/maintenance.js). Без сборки и без Python, поэтому всё своё — внутри файла. */
+  :root {
+    --bg: #0b1622; --bg2: #102235; --card: rgba(18, 32, 46, .82); --line: rgba(120, 170, 190, .18);
+    --text: #eaf1f5; --muted: #9db0bb; --accent: #3cc3cf; --tape: #f5b800; --ink: #14181c;
+  }
+  * { box-sizing: border-box; }
+  /* Фон на html и закреплён: на длинной странице телефона иначе снизу белая полоса и шов. */
+  html {
+    min-height: 100%; background-color: var(--bg); background-attachment: fixed;
+    background-image:
+      radial-gradient(1200px 600px at 85% 110%, rgba(60, 195, 207, .16), transparent 60%),
+      radial-gradient(900px 500px at -10% -10%, rgba(245, 184, 0, .10), transparent 60%),
+      linear-gradient(160deg, var(--bg) 0%, var(--bg2) 100%);
+  }
+  body {
+    margin: 0; color: var(--text); overflow-x: hidden;
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  /* Сетка «чертежа» на фоне. */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .5;
+    background-image: linear-gradient(var(--line) 1px, transparent 1px),
+                      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(ellipse at center, #000 30%, transparent 75%);
+  }
+  .tape {
+    height: 22px; flex: none; position: relative; z-index: 1;
+    background: repeating-linear-gradient(-45deg, var(--tape) 0 22px, var(--ink) 22px 44px);
+    background-size: 62.2px 22px; animation: slide 2.4s linear infinite;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, .35);
+  }
+  .tape.bottom { animation-direction: reverse; }
+  @keyframes slide { to { background-position: 62.2px 0; } }
+  main {
+    flex: 1; width: 100%; max-width: 1080px; margin: 0 auto; padding: 32px 16px;
+    display: grid; grid-template-columns: 1.05fr .95fr; align-items: center; gap: 24px;
+    position: relative; z-index: 1;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 28px;
+    padding: 36px 32px; backdrop-filter: blur(10px);
+    box-shadow: 0 30px 80px -40px rgba(0, 0, 0, .7);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 10px; padding: 7px 14px; border-radius: 999px;
+    font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--ink); background: var(--tape);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink); animation: blink 1.2s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  h1 { font-size: clamp(30px, 4.2vw, 46px); line-height: 1.08; margin: 18px 0 14px; letter-spacing: -.02em; }
+  h1 span { color: var(--accent); }
+  p { margin: 0 0 12px; color: var(--muted); font-size: 17px; }
+  /* Высота — под две строки всегда: фраза, ушедшая на вторую строку, иначе толкала
+     вниз полосу и кнопку на каждой смене. */
+  .status {
+    margin: 22px 0 10px; min-height: 2.9em; line-height: 1.45; font-weight: 600; color: var(--text);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .gear { width: 22px; height: 22px; flex: none; color: var(--accent); animation: spin 4s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #line { transition: opacity .35s ease, transform .35s ease; }
+  #line.out { opacity: 0; transform: translateY(6px); }
+  .bar { height: 10px; border-radius: 999px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+  .bar > i {
+    display: block; height: 100%; width: 42%; border-radius: inherit;
+    background: repeating-linear-gradient(-45deg, var(--accent) 0 10px, #2aa6b1 10px 20px);
+    animation: run 1.8s ease-in-out infinite;
+  }
+  @keyframes run { 0% { transform: translateX(-100%); } 100% { transform: translateX(240%); } }
+  .safe {
+    display: flex; gap: 12px; align-items: flex-start; margin-top: 22px; padding: 14px 16px;
+    border-radius: 16px; background: rgba(60, 195, 207, .10); border: 1px solid rgba(60, 195, 207, .25);
+    color: var(--text); font-size: 15px;
+  }
+  .safe svg { flex: none; margin-top: 2px; color: var(--accent); }
+  button {
+    margin-top: 22px; font: inherit; font-weight: 700; color: var(--ink); background: var(--accent);
+    border: 0; border-radius: 14px; padding: 13px 24px; min-height: 48px; cursor: pointer;
+    box-shadow: 0 10px 30px -12px rgba(60, 195, 207, .8); transition: transform .15s ease;
+  }
+  button:hover { transform: translateY(-1px); }
+  button:focus-visible { outline: 3px solid var(--tape); outline-offset: 3px; }
+  .note { font-size: 14px; margin-top: 18px; }
+  .since { font-size: 14px; color: var(--accent); }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .admin { margin-top: 22px; color: var(--muted); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
+  .admin:hover { color: var(--text); }
+  [hidden] { display: none !important; }
+  .hero { position: relative; display: flex; justify-content: center; }
+  .hero::after {
+    content: ""; position: absolute; bottom: 2%; left: 18%; right: 18%; height: 7%;
+    background: radial-gradient(ellipse, rgba(0, 0, 0, .45), transparent 70%); filter: blur(4px);
+  }
+  .vector {
+    width: 100%; max-width: 440px; height: auto; position: relative; z-index: 1;
+    animation: bob 3.6s ease-in-out infinite; filter: drop-shadow(0 18px 30px rgba(0, 0, 0, .35));
+  }
+  @keyframes bob { 50% { transform: translateY(-10px) rotate(-.6deg); } }
+  .spark { position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--tape); opacity: 0; animation: spark 3s ease-out infinite; }
+  .spark.s1 { top: 22%; left: 20%; animation-delay: .2s; }
+  .spark.s2 { top: 30%; right: 18%; animation-delay: 1.1s; background: var(--accent); }
+  .spark.s3 { top: 58%; left: 12%; animation-delay: 2s; }
+  @keyframes spark { 0% { opacity: 0; transform: scale(.4); } 20% { opacity: 1; } 100% { opacity: 0; transform: translateY(-40px) scale(1.2); } }
+  footer { position: relative; z-index: 1; text-align: center; color: var(--muted); font-size: 13px; padding: 14px 16px 18px; }
+  @media (max-width: 820px) {
+    main { grid-template-columns: 1fr; padding-top: 12px; gap: 0; }
+    .hero { order: -1; margin-bottom: -28px; }
+    .vector { max-width: 190px; }
+    .card { padding: 24px 20px; }
+    h1 { margin: 14px 0 10px; }
+    p { font-size: 16px; }
+    .status { margin-top: 12px; }
+    .actions button { width: 100%; margin-top: 16px; }
+    .admin { margin-top: 4px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tape, .dot, .gear, .bar > i, .vector, .spark { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="tape" aria-hidden="true"></div>
+<main>
+  <section class="card">
+    <span class="chip"><span class="dot" aria-hidden="true"></span>Технические работы</span>
+    <h1>Вектор чинит <span>журнал</span></h1>
+    <p id="msg">Ставим обновление и проверяем, что всё работает как надо. Обычно это несколько минут.</p>
+    <p id="since" class="since" hidden></p>
+    <div class="status" aria-live="polite">
+      <svg class="gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+      <span id="line">Подкручиваем гайки в расписании…</span>
+    </div>
+    <div class="bar" aria-hidden="true"><i></i></div>
+    <!-- Кнопка сразу под прогрессом: на телефоне до неё не надо листать. -->
+    <div class="actions">
+      <button type="button" id="retry">Проверить снова</button>
+      <a id="admin" class="admin" href="/login?admin=1" hidden>Вход для администратора</a>
+    </div>
+    <div class="safe">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
+      <span>Оценки, расписание и переписка в сохранности — ничего не пропадёт.</span>
+    </div>
+    <p class="note">Программа для Windows продолжает работать с журналом без сети и отправит
+       изменения, когда сайт вернётся. Страница обновится сама.</p>
+  </section>
+  <div class="hero">
+    <span class="spark s1" aria-hidden="true"></span><span class="spark s2" aria-hidden="true"></span><span class="spark s3" aria-hidden="true"></span>
+    <img class="vector" src="vector-work.webp" alt="Вектор в каске показывает «всё будет хорошо»" width="720" height="892">
+  </div>
+</main>
+<div class="tape bottom" aria-hidden="true"></div>
+<footer>GradeBookAI · Технологический колледж ВСГУТУ</footer>
+<script>
+  // Какой рубильник включён, страница узнаёт сама по /app/maintenance: JSON — мягкий
+  // (приложение живо, админ может войти); не JSON или нет ответа — жёсткий (Caddy отдал
+  // эту же страницу вместо API). Работы кончились — возвращаем человека на сайт.
+  // ?api= — адрес сервера для приложения на телефоне (страница у него своя, локальная).
+  var q = new URLSearchParams(location.search);
+  var api = /^https:\/\/[A-Za-z0-9.-]+(:\d+)?$/.test(q.get("api") || "") ? q.get("api") : "";
+  var back = /^\/(?!\/)/.test(q.get("back") || "") ? q.get("back") : "/";
+  function check() {
+    fetch(api + "/app/maintenance", { cache: "no-store" }).then(function (r) {
+      return (r.headers.get("content-type") || "").indexOf("json") >= 0 ? r.json() : null;
+    }).then(function (d) {
+      if (d && !d.on) { location.replace(back); return; }
+      document.getElementById("admin").hidden = !d;
+      if (d && d.message) document.getElementById("msg").textContent = d.message;
+      var since = document.getElementById("since");
+      if (d && d.since) {
+        var min = Math.max(1, Math.round((Date.now() / 1000 - d.since) / 60));
+        since.textContent = "Работы идут " + min + " мин.";
+        since.hidden = false;
+      }
+    }).catch(function () { document.getElementById("admin").hidden = true; });
+  }
+  document.getElementById("retry").onclick = check;
+  check();
+  setInterval(check, 30000);
+  var lines = ["Подкручиваем гайки в расписании…", "Проверяем, что все оценки на месте…",
+    "Смазываем синхронизацию…", "Ставим заплатки безопасности…",
+    "Вектор пьёт чай и читает логи…", "Протираем пыль с базы данных…"];
+  var i = 0, el = document.getElementById("line");
+  setInterval(function () {
+    el.className = "out";
+    setTimeout(function () { i = (i + 1) % lines.length; el.textContent = lines[i]; el.className = ""; }, 350);
+  }, 3200);
+</script>
+</body>
+</html>

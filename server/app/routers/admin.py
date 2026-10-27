@@ -10,7 +10,7 @@ admin.py — Служебный мониторинг для админ-пане�
 """
 import time
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -19,6 +19,8 @@ from ..models import User, AuthSession
 from ..schemas import RevokeIn
 from .. import client_app
 from .. import events
+from .. import maintenance, audit
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -111,3 +113,27 @@ def revoke_session(body: RevokeIn,
                       f"админ отозвал сессии ({revoked})",
                       body.login or body.jti, "")
     return {"revoked": revoked}
+
+
+class MaintenanceIn(BaseModel):
+    on: bool
+    message: str = ""
+
+
+@router.get("/maintenance")
+def maintenance_state(_admin: User = Depends(require_admin)):
+    """Состояние мягкого рубильника для карточки в «Сервере» (кто и когда включил)."""
+    return maintenance.state()
+
+
+@router.post("/maintenance")
+def set_maintenance(body: MaintenanceIn, request: Request,
+                    admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Включить или выключить технические работы (app/maintenance.py). Включение пишется
+    в журнал безопасности: сайт для всех, кроме админа, перестаёт работать."""
+    st = maintenance.set_state(body.on, admin.login, body.message)
+    audit.log(db, request, actor=admin.login, role="admin",
+              action="maintenance_on" if body.on else "maintenance_off",
+              detail=(body.message or "")[:200], level="warn" if body.on else "info")
+    db.commit()
+    return st

@@ -29,6 +29,7 @@ import RemoteConsole from '@/components/server/RemoteConsole.vue'
 import MigrationWizard from '@/components/server/MigrationWizard.vue'
 import ServerBackups from '@/components/server/ServerBackups.vue'
 import ServiceControls from '@/components/server/ServiceControls.vue'
+import MaintenanceSwitch from '@/components/server/MaintenanceSwitch.vue'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
@@ -199,6 +200,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
 
 <template>
   <div class="flex flex-col gap-4">
+    <MaintenanceSwitch />
     <!-- ─────────── УПРАВЛЕНИЕ: ТОЛЬКО В ПРОГРАММЕ, И СРАЗУ ─────────── -->
     <!-- Стоит первым намеренно: в программе этот раздел открывают, чтобы ЧТО-ТО
          сделать с сервером, а не почитать про него. -->

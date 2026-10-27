@@ -10,7 +10,7 @@ unattended-upgrades ставит только пакеты ОС, а CI пров�
      другие базы). Для дыры с выпущенным исправлением ставится НАИМЕНЬШАЯ исправленная
      версия, затем `pip check`, перезапуск службы и ожидание /health. Не поднялось —
      откат на прежние версии и второй перезапуск.
-  2. Пакеты ОС и Caddy: `unattended-upgrade` сразу, без перезагрузки (её делает ночной
+  2. Пакеты ОС и Caddy: обновления безопасности и Caddy сразу, без перезагрузки (её делает ночной
      прогон в 02:00 по Иркутску). Источники — те же, что ночью: обновления безопасности
      Ubuntu и репозиторий Caddy (`deploy/maintenance/52gradebook-unattended`).
   3. Найденное сверяется со списком CISA KEV: «уже используют в атаках» — первой строкой.
@@ -182,13 +182,37 @@ def apply_python(plan: dict, current: dict, run=_run, healthy=_healthy) -> dict:
     return {"ok": True, "detail": detail}
 
 
+def security_upgradable(apt_list: str) -> list:
+    """Пакеты из раздела безопасности Ubuntu и Caddy в выводе `apt list --upgradable`.
+
+    Строка вида «openssh-server/noble-updates,noble-security 1:9.6p1… amd64 [upgradable…]»;
+    у Caddy раздел свой — «caddy/any-version». Обычные noble-updates не трогаем: они меняют
+    поведение, а не закрывают дыры (deploy/maintenance/52gradebook-unattended)."""
+    out = set()
+    for line in apt_list.splitlines():
+        name, sep, rest = line.partition("/")
+        if not sep or " " in name:
+            continue
+        suite = rest.split(" ", 1)[0]
+        if "-security" in suite or name == "caddy":
+            out.add(name)
+    return sorted(out)
+
+
 def apply_os(run=_run) -> dict:
-    """Обновления безопасности ОС и Caddy сразу, без перезагрузки. Итог — что поставилось."""
+    """Обновления безопасности ОС и Caddy сразу, без перезагрузки. Итог — что поставилось.
+
+    Не `unattended-upgrade`: перезагрузку ему днём не отключить (опции `-o` у него нет, а
+    52gradebook-unattended велит перезагружаться сразу). Перезагрузку делает ночной прогон."""
     q = ["dpkg-query", "-W", "-f=${Package} ${Version}\n"]
     before = dict(line.split(" ", 1) for line in run(q)[1].splitlines() if " " in line)
     run(["apt-get", "update", "-qq"], timeout=300)
-    code, out = run(["unattended-upgrade", "-o", "Unattended-Upgrade::Automatic-Reboot=false"],
-                    timeout=1800)
+    pkgs = security_upgradable(run(["apt", "list", "--upgradable"])[1])
+    code, out = 0, ""
+    if pkgs:
+        code, out = run(["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-q",
+                         "--only-upgrade", "-o", "Dpkg::Options::=--force-confdef",
+                         "-o", "Dpkg::Options::=--force-confold"] + pkgs, timeout=1800)
     after = dict(line.split(" ", 1) for line in run(q)[1].splitlines() if " " in line)
     changed = sorted("%s %s → %s" % (p, before.get(p, "—"), v)
                      for p, v in after.items() if before.get(p) != v)

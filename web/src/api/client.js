@@ -233,6 +233,13 @@ api.interceptors.response.use(
     // увидел бы россыпь «нет прав» на исправных страницах и пошёл бы искать, кто
     // отобрал у него доступ, — вместо настройки за минуту. Заголовок для того и
     // машиночитаемый.
+    // Технические работы (оба рубильника шлют X-Gb-Reason): решает App.vue — админа
+    // оставляет в круге сервера, остальных уводит на страницу работ (stores/maintenance.js).
+    if (response?.status === 503 && response.headers?.['x-gb-reason'] === 'maintenance') {
+      window.dispatchEvent(new CustomEvent('gb:maintenance', {
+        detail: { soft: !!response.data?.maintenance } }))
+      return Promise.reject(error)
+    }
     // Приложение отстало на пять выпусков: экран «обновите» (components/ui/ForceUpdate.vue).
     if (response?.status === 426 && response.headers?.['x-gb-reason'] === 'update_required') {
       window.dispatchEvent(new CustomEvent('gb:update-required', { detail: response.data || {} }))

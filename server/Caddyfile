@@ -113,27 +113,29 @@ esstu-gradebook.ru {
 		minimum_length 1024
 	}
 
-	# ━━ РУБИЛЬНИК ОБСЛУЖИВАНИЯ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-	# Есть файл-флаг — весь сайт и API отвечают 503 со страницей «технические работы».
-	# Включает и выключает `deploy/maintenance/gb_maintenance.sh on|off`; перезагрузка
-	# Caddy не нужна: матчер `file` проверяет флаг на каждом запросе. Блок стоит ПЕРВЫМ
-	# среди `handle` с именованным матчером — такие идут в порядке записи, и статика с
-	# прокси под ним уже не срабатывают. Картинки страницы лежат под /_maint/ и
-	# отдаются с кодом 200: часть браузеров не рисует картинку из ответа 503.
+	# ━━ ЖЁСТКИЙ РУБИЛЬНИК ОБСЛУЖИВАНИЯ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+	# Есть файл-флаг — весь сайт и API отвечают 503 страницей «технические работы». Та же
+	# страница при мягком рубильнике из админки (`web/public/maintenance/`, app/maintenance.py).
+	# Включает `deploy/maintenance/gb_maintenance.sh on|off`; перезагрузка Caddy не нужна:
+	# матчер `file` проверяет флаг на каждом запросе. Блок стоит ПЕРВЫМ среди `handle` с
+	# именованным матчером — такие идут в порядке записи. Файлы самой страницы отдаются с
+	# кодом 200: часть браузеров не рисует картинку из ответа 503. X-Gb-Reason — чтобы
+	# приложение на телефоне узнало работы и показало эту страницу, а не «нет сети».
 	@maintenance file {
 		root /var/www/gb-maintenance
 		try_files /maintenance.on
 	}
 	handle @maintenance {
-		root * /var/www/gb-maintenance
+		root * /var/www/gradebook
 		header Cache-Control "no-store"
-		@maint_asset path /_maint/*
+		header X-Gb-Reason "maintenance"
+		@maint_asset path /maintenance/*
 		handle @maint_asset {
 			file_server
 		}
 		handle {
 			header Retry-After "900"
-			rewrite * /index.html
+			rewrite * /maintenance/index.html
 			file_server {
 				status 503
 			}
@@ -155,7 +157,7 @@ esstu-gradebook.ru {
 	# срабатывает, и запрос уходит на Python, как раньше. Худший исход — медленно,
 	# а не «битый сайт»; частичный деплой у нас уже ронял прод, второй раз не надо.
 	@static_file {
-		path /assets/* /fonts/* /icons/* /mascot/* /easter/*
+		path /assets/* /fonts/* /icons/* /mascot/* /easter/* /maintenance/*
 		file {
 			root /var/www/gradebook
 		}

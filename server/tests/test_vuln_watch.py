@@ -73,6 +73,24 @@ def test_a_healthy_upgrade_is_kept():
     assert not any("certifi==2026.6.17" in c for c in m.calls)
 
 
+def test_only_security_updates_and_caddy_are_installed_by_day():
+    listing = "\n".join((
+        "Listing...",
+        "openssh-server/noble-updates,noble-security 1:9.6p1-3ubuntu13.21 amd64 [upgradable from: 1:9.6p1-3ubuntu13.20]",
+        "tmux/noble-updates 3.4-1ubuntu0.2 amd64 [upgradable from: 3.4-1ubuntu0.1]",
+        "caddy/any-version 2.11.8 amd64 [upgradable from: 2.11.7]"))
+    assert vuln_watch.security_upgradable(listing) == ["caddy", "openssh-server"]
+    calls = []
+
+    def run(cmd, timeout=600):
+        calls.append(cmd)
+        return 0, listing if cmd[:2] == ["apt", "list"] else ""
+    res = vuln_watch.apply_os(run=run)
+    install = [c for c in calls if "install" in c]
+    assert res["ok"] and install and install[0][-2:] == ["caddy", "openssh-server"]
+    assert not any("unattended-upgrade" in c or "reboot" in " ".join(c) for c in calls)
+
+
 def test_the_evening_report_names_exploited_holes_and_failed_patches():
     d = {"security": {"known": True, "age_h": 0.5, "hold": ["torch"], "errors": [],
                       "open": [{"package": "starlette", "version": "1.0.0", "id": "GHSA-x",

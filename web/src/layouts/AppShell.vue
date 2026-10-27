@@ -32,6 +32,8 @@ import { useNavBadgesStore } from '@/stores/navBadges'
 import { isHandheld } from '@/utils/device'
 import { shellBadgeTickDue } from '@/utils/livePolling'
 import { useLocaleStore } from '@/stores/locale'
+import { useMaintenanceStore } from '@/stores/maintenance'
+import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
 //Переход «к содержимому»: фокус на <main>, а не только прокрутка — иначе следующий Tab
@@ -324,6 +326,7 @@ watch(() => route.path, () => {
 // делает, а роль к моменту монтажа оболочки может быть ещё не подставлена. Без
 // ожидания это тот же немой отказ, только по другой причине.
 const auth = useAuthStore()
+const maint = useMaintenanceStore()
 async function askLoginEggs() {
   if (!auth.role) {
     //Ждём роль, но не бесконечно: полсекунды с запасом, дальше просто не спрашиваем.
@@ -402,6 +405,13 @@ onMounted(askLoginEggs)
       <!-- Нижнюю безопасную зону занимает панель, когда она есть; без неё — `main`. -->
       <main id="gb-main" tabindex="-1" class="app-canvas min-h-0 flex-1 overflow-y-auto outline-none"
             :style="{ paddingBottom: tabbarShown ? '0px' : 'env(safe-area-inset-bottom)' }">
+        <!-- Идут технические работы: админ должен видеть это всегда, иначе забудет выключить. -->
+        <RouterLink v-if="auth.role === 'admin' && maint.on" to="/admin/server"
+                    class="sticky top-0 z-30 flex items-center gap-2 border-b border-orange/40 bg-orange/15 px-4 py-2 text-sm font-semibold text-orange">
+          <GbIcon name="warn" class="size-4 shrink-0" />
+          <span class="min-w-0 flex-1">{{ locale.t('maintenance.banner', 'Идут технические работы — сайт закрыт для пользователей. Вам доступен круг сервера.') }}</span>
+          <span class="shrink-0 underline underline-offset-2">{{ locale.t('maintenance.manage', 'Управлять') }}</span>
+        </RouterLink>
         <!-- Отступы ужаты (3.5.6): было p-4 / sm:px-7 sm:py-6 — «жирная рамка» вокруг
              активного окна съедала полосу по всему периметру, ничего в ней не показывая. -->
         <!-- Правый отступ добавляем ТОЛЬКО когда у края висит вкладка-возврат Вектора:

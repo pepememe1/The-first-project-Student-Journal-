@@ -9,6 +9,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useEasterStore, leaveAsk } from '@/stores/easterEggs'
 import { useConfirm } from '@/composables/useConfirm'
 import { useAuthStore } from '@/stores/auth'
+import { useMaintenanceStore, ADMIN_ROUTES } from '@/stores/maintenance'
 import { needsServer } from '@/api/server'
 import { HOME_BY_ROLE } from '@/config/nav'
 import { messagesRedirect } from '@/utils/deepLinks'
@@ -394,6 +395,11 @@ router.beforeEach(async (to, from) => {
   if (!auth.isAuthenticated) return { path: '/login' }
   //Страница существует, но принадлежит другой роли — это «нельзя», а не «нет такой».
   if (to.meta.role && to.meta.role !== auth.role) return { path: '/404', query: { from: to.path } }
+  //Технические работы: админу — только круг сервера (зеркало maintenance.ADMIN_PREFIXES
+  //на сервере), остальных App.vue уже увёл на страницу работ.
+  const maint = useMaintenanceStore()
+  if (maint.on && auth.role === 'admin' && !ADMIN_ROUTES.some((p) => to.path.startsWith(p)))
+    return '/admin/server'
   //А несуществующий адрес разбираем по первому сегменту: свой раздел — обычная опечатка,
   //возвращаем на главную; чужой — оставляем на 404, куда его уже направил catch-all.
   if (to.path === '/404') {

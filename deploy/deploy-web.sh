@@ -78,7 +78,7 @@ ssh $O "$VPS" 'set -e
   # лежат файлы с хешем содержимого, которые ещё нужны открытым вкладкам со старой
   # сборкой (см. выше); снеси их — и получишь тот самый немой 404. Остальные каталоги
   # заменяются целиком: там имена постоянные, и лишний старый файл только мешает.
-  for d in fonts icons mascot easter; do
+  for d in fonts icons mascot easter maintenance; do
     test -d "/root/gb-deploy/webdist/$d" && rsync -a --delete       "/root/gb-deploy/webdist/$d/" "/var/www/gradebook/$d/"
   done
   rsync -a "/root/gb-deploy/webdist/assets/" "/var/www/gradebook/assets/"

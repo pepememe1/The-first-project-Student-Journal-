@@ -137,6 +137,14 @@ def _file_manifest(zip_path: Path, version: str, base: str) -> list | None:
 # с 56–101 мс до 16–30 мс; до нуля она не падает — потоки делят с циклом один GIL.
 # Правка убирает КЛАСС («async без await»), а не секунды. Держит
 # `test_event_loop_not_blocked.py::test_routes_without_await_are_plain_def`.
+@router.get("/maintenance")
+def maintenance_state():
+    """Идут ли технические работы — без входа: экран «технические работы» нужен и на
+    странице входа (app/maintenance.py). Текст для людей и момент включения, без имён."""
+    from .. import maintenance
+    return maintenance.public_view()
+
+
 @router.api_route("/updates", methods=["GET", "POST"])
 def updates(request: Request):
     """Манифест последнего бандла для Capgo. Нет бандла → «нечего обновлять»."""

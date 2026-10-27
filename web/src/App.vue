@@ -13,10 +13,13 @@ import ForceUpdate from '@/components/ui/ForceUpdate.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { rememberResume } from '@/utils/sessionResume'
+import { useMaintenanceStore } from '@/stores/maintenance'
+import { useLocaleStore } from '@/stores/locale'
 
 const router = useRouter()
 const auth = useAuthStore()
 const toast = useToast()
+const locale = useLocaleStore()
 
 /**
  * Сессия кончилась не по воле человека — ведём на вход и ОБЪЯСНЯЕМ почему.
@@ -40,8 +43,31 @@ function toLogin(reason = 'expired') {
   if (at.path !== '/login') router.push('/login')
 }
 
+// Технические работы: админа оставляем в круге сервера (разделы закрывает роутер),
+// остальных уводим на страницу работ — одну на оба рубильника. На форме входа с ?admin=1
+// администратор входит, хотя работы идут (ссылка «Вход для администратора»).
+const maint = useMaintenanceStore()
+function onMaintenance(soft) {
+  maint.on = true
+  const at = router.currentRoute.value
+  if (soft && auth.role === 'admin') {
+    toast.error(locale.t('maintenance.blockedForAdmin', 'Во время работ этот раздел закрыт — доступен круг сервера'))
+    return
+  }
+  if (at.path === '/login' && at.query.admin === '1') return
+  maint.goToPage()
+}
+
 onMounted(() => {
   setAuthExpiredHandler(() => toLogin('expired'))
+
+  window.addEventListener('gb:maintenance', (e) => onMaintenance(!!e.detail?.soft))
+  maint.refresh().then((on) => { if (on) onMaintenance(true) })
+  //Админу — живое состояние для плашки: выключил работы с другого устройства — плашка ушла.
+  setInterval(() => {
+    if (document.hidden) return     //свёрнутая вкладка не опрашивает сервер (livePolling.js)
+    if (auth.role === 'admin') maint.refresh()
+  }, 60000)
 
   // Администратору нужен второй фактор: сервер закрыл ВСЁ, кроме его настройки.
   // Ведём человека прямо туда и объясняем причину, вместо россыпи «нет прав» на

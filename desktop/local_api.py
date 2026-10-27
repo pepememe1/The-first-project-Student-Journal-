@@ -1007,6 +1007,8 @@ def instance() -> LocalAPI:
 #`/web/messenger` (и сокет — `/web/messenger/ws`), маршрутов на «/messenger» у сервера
 #нет вовсе. Мёртвую запись нашёл сторож `tests/test_route_policy.py`.
 _PROXY_PREFIXES = ("/web/messenger", "/web/admin/server",
+                   #Рубильник работ живёт на боевом сервере: локально он выключал бы копию.
+                   "/admin/maintenance",
                    "/me/prefs", "/me/events",
                    #Одобрение чужих машин админом: список ожидающих живёт на БОЕВОМ
                    #сервере, а в локальной копии его нет и быть не может — без пересылки
