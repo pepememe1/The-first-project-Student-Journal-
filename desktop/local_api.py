@@ -1468,12 +1468,29 @@ def install_origin_guard(app) -> None:
 
     @app.middleware("http")
     async def _reject_foreign_origin(request: Request, call_next):
-        origin = (request.headers.get("origin") or "").strip()
-        if origin and not _is_loopback_origin(origin):
-            _LOG.warning(f"[local-api] отклонён запрос со стороннего origin: {origin}")
+        foreign = _foreign_caller(request)
+        if foreign:
+            _LOG.warning(f"[local-api] отклонён запрос не с этой машины: {foreign}")
             return Response(content='{"detail":"forbidden"}'.encode(),
                             status_code=403, media_type="application/json")
         return await call_next(request)
+
+
+def _foreign_caller(request) -> str:
+    """Откуда пришёл чужой запрос («origin …» или «host …»); пустая строка — свой.
+
+    Origin отсекает чужую страницу. Host — чужой домен, перевязанный на 127.0.0.1
+    (DNS-rebinding): после перевязки запрос для браузера свой, GET уходит без Origin, и
+    страница-передатчик отдала бы токен. Host браузер ставит сам, страница его не
+    подделает (аудит 27.10.2026). Пустой Host считаем своим по той же причине, что и
+    пустой Origin: браузер его шлёт всегда."""
+    origin = (request.headers.get("origin") or "").strip()
+    if origin and not _is_loopback_origin(origin):
+        return f"origin {origin}"
+    host = (request.headers.get("host") or "").strip()
+    if host and not _is_loopback_origin("//" + host):
+        return f"host {host}"
+    return ""
 
 
 def _is_loopback_origin(origin: str) -> bool:
@@ -1505,9 +1522,9 @@ async def _forward_to_prod(request, path: str, *, write: bool = False):
     #получался бы открытым, и единственным следом была бы строка WARNING в логе.
     #Прокси — самое дорогое место в программе (он подставляет БОЕВОЙ токен), поэтому
     #здесь дешевле проверить дважды, чем один раз положиться на порядок установки.
-    origin = (request.headers.get("origin") or "").strip()
-    if origin and not _is_loopback_origin(origin):
-        _LOG.warning(f"[proxy] отклонён запрос со стороннего origin: {origin}")
+    foreign = _foreign_caller(request)
+    if foreign:
+        _LOG.warning(f"[proxy] отклонён запрос не с этой машины: {foreign}")
         return Response(content='{"detail":"forbidden"}'.encode(),
                         status_code=403, media_type="application/json")
     #🔒 СНАЧАЛА проверяем, КТО спрашивает, и только потом подставляем боевой токен.

@@ -134,7 +134,7 @@ def test_the_proxy_checks_the_origin_itself(api):
     #Проверка origin стоит в ней, поэтому сторож спрашивает две вещи: дверь проверяет
     #origin сама, и обе установки ведут именно в неё (а не в обход).
     door = inspect.getsource(local_api._forward_to_prod)
-    assert "_is_loopback_origin" in door, (
+    assert "_foreign_caller(" in door, (
         "пересылка на бой перестала проверять origin сама — теперь всё держится на том, "
         "что общая заслонка успела встать")
     for install in (local_api.install_remote_proxy, local_api.install_write_policy):
@@ -150,3 +150,17 @@ def test_a_lookalike_host_is_not_mistaken_for_the_loopback(api):
     оба этих адреса, и в этом проекте на такой ошибке уже обжигался сторож вёрстки."""
     assert _status(api.url("/health"), {"Origin": "https://127.0.0.1.evil.example"}) == 403
     assert _status(api.url("/health"), {"Origin": "https://evil.example/#127.0.0.1"}) == 403
+
+
+def test_a_rebound_domain_does_not_get_the_session(api):
+    """DNS-rebinding: чужой домен перевязан на 127.0.0.1, и для браузера запрос свой.
+
+    GET со своей страницы уходит без Origin, поэтому одна заслонка origin его пропускала,
+    а страница-передатчик отдавала токен — пропуск в пересылку с боевым токеном. Отличить
+    такой запрос можно только по Host (аудит 27.10.2026)."""
+    port = api.port
+    assert _status(api.url("/desktop/bootstrap"), {"Host": f"evil.example:{port}"}) == 403
+    assert _status(api.url("/health"), {"Host": f"127.0.0.1.evil.example:{port}"}) == 403
+    #Обратный ход: свои имена петли проходят, иначе окно программы не открылось бы.
+    for own in (f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"):
+        assert _status(api.url("/health"), {"Host": own}) == 200, own
