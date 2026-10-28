@@ -118,6 +118,24 @@
 </section>
 
 <section>
+<h2>Копия базы на этом ПК</h2>
+<ul>
+  <li>Лежит в <code>D:\GradeBookAI-backups</code> (если диска D нет — <code>GradeBookAI-backups</code> в папке пользователя):
+      30 последних ночных копий, журнал <code>pull.log</code> и секреты сервера <code>server-env.dpapi</code>.</li>
+  <li>Забирает планировщик Windows, задача «GradeBookAI — копия базы»: при входе в Windows и каждые 6 часов,
+      пока ПК включён. Хеш каждой копии сверяется с сервером. В вечернем письме строка «🏠 Копия базы на ПК»
+      говорит, сколько дней назад была последняя.</li>
+  <li>Копия зашифрована ключом базы, а ключ лежит в секретах сервера. Без <code>server-env.dpapi</code> копия бесполезна.
+      Расшифровать его может только эта учётка Windows на этом ПК.</li>
+</ul>
+<p>Достать секреты (покажет на экране, в файл не сохранять), в PowerShell:</p>
+<div class="cmd"><code>Add-Type -AssemblyName System.Security; [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes('D:\GradeBookAI-backups\server-env.dpapi'), $null, 'CurrentUser'))</code><button>Копировать</button></div>
+<p>Поднять журнал на новой машине: положи этот текст в <code>/opt/gradebook/server/.env</code>, скопируй туда же
+файл копии и запусти <code>sudo bash deploy/install.sh --domain esstu-gradebook.ru --restore-db ФАЙЛ_КОПИИ</code>.
+Без <code>.env</code> установщик откажет (код 3): новый ключ над старой базой — это потеря данных.</p>
+</section>
+
+<section>
 <h2>Чего не делать</h2>
 <ul>
   <li>Не открывать в браузере служебные адреса сайта (<code>/.env</code>, <code>/wp-admin</code> и подобные):

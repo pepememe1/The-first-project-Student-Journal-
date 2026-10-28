@@ -49,9 +49,9 @@ export function dashboardEmote({ average = 0, absences = 0 } = {}) {
 const PRELOAD = ['neutral-idle', 'think-think', 'happy-cheer', 'happy-congrats',
                  'sad-cheer', 'warn-warn', 'neutral-cheer', 'surprise-idle']
 
-// ⚠️ Та же версия арта, что в Mascot.vue, и по той же причине: файлы в `public/` не
-// получают хеш в имени, поэтому без метки предзагрузка бережно кладёт в кэш СТАРЫЕ файлы.
-// Держать значение синхронным с ART_VERSION в Mascot.vue.
+// ⚠️ Версия арта — одна на проект, здесь; её берут и Mascot.vue, и предзагрузчики ниже.
+// Файлы в `public/` не получают хеш в имени, поэтому без метки браузер и service worker
+// отдавали бы СТАРЫЕ файлы. Поднимать при каждой пересборке `public/mascot/`.
 // 4 — 28.10.2026: анимации пересжаты (METHOD 6, minimize_size), тот же кроп и тайминг.
 export const ART_VERSION = 4
 let _preloaded = false
