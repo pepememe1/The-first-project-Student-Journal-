@@ -305,7 +305,8 @@ jobs:
         run: |
           # Красным станет зелёным, когда ключ OpenRouter отзовут или старые теги удалят
           # (.gitleaksignore). До тех пор здесь виден ровно он — и любая новая находка.
-          /tmp/gitleaks detect --source . --redact --no-banner --exit-code 1             || echo "::warning title=gitleaks::в старых тегах есть находки — см. .gitleaksignore"
+          /tmp/gitleaks detect --source . --redact --no-banner --exit-code 1 \
+            || echo "::warning title=gitleaks::в старых тегах есть находки — см. .gitleaksignore"
 
   sbom:
     name: SBOM (состав поставки)

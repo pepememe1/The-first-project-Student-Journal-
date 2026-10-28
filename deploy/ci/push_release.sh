@@ -25,17 +25,21 @@ ART=$(ls dist-release/gradebook-*.tar.gz | head -1)
 SHA=$(sha256sum "$ART" | cut -d' ' -f1)
 echo "архив: $ART ($SHA)"
 
-deployed=$("${SSH[@]}" "$HOST" status | python3 -c '
+# Сервер и сайт выкладываются частями и могут стоять на разных коммитах (откатился один
+# сайт — первый автодеплой 28.10.2026). Пропуск — только если на этом коммите обе части.
+read -r server web < <("${SSH[@]}" "$HOST" status | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-print(((d.get("server") or {}).get("commit") or "").split("+")[0])')
-echo "на бою: ${deployed:-неизвестно}"
-if [ "$deployed" = "$SHA_COMMIT" ]; then
+print(*[((d.get(p) or {}).get("commit") or "-").split("+")[0] for p in ("server", "web")])')
+echo "на бою: сервер ${server}, сайт ${web}"
+if [ "$server" = "$SHA_COMMIT" ] && [ "$web" = "$SHA_COMMIT" ]; then
   echo "этот коммит уже на бою — выкладывать нечего"
   exit 0
 fi
-if [ -n "$deployed" ] && ! git merge-base --is-ancestor "$deployed" "$SHA_COMMIT" 2>/dev/null; then
-  echo "::notice title=Выкладка пропущена::На бою ${deployed:0:12}, и это не предок ${SHA_COMMIT:0:12}: ветка не продолжает то, что на бою. Выкладка — вручную (deploy/deploy-server.sh)."
-  exit 0
-fi
+for part in "$server" "$web"; do
+  if [ "$part" != "-" ] && ! git merge-base --is-ancestor "$part" "$SHA_COMMIT" 2>/dev/null; then
+    echo "::notice title=Выкладка пропущена::На бою ${part:0:12}, и это не предок ${SHA_COMMIT:0:12}: ветка не продолжает то, что на бою. Выкладка — вручную (deploy/deploy-server.sh)."
+    exit 0
+  fi
+done
 "${SSH[@]}" "$HOST" "deploy $SHA_COMMIT $SHA" < "$ART"
