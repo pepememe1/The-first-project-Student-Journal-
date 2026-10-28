@@ -64,27 +64,26 @@ tar -C "$STAGE/payload" -czf "$TAR" app root
 echo "   размер архива: $(du -h "$TAR" | cut -f1)"
 
 echo "== [3/5] Заливка (одна передача) =="
+# Вместе с архивом едет свежий apply_release.sh: подмену, смоук и откат делает он — тот
+# же, что зовёт автодеплой из CI. Одна реализация на оба пути (28.10.2026).
+COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+[ -n "$(git -C "$ROOT" status --porcelain -- server/app)" ] && COMMIT="$COMMIT+dirty"
 scp $O "$TAR" "$VPS:/root/gb-deploy/server-app.tgz"
+scp $O "$ROOT/deploy/apply_release.sh" "$VPS:/root/gb-deploy/maintenance/apply_release.sh.new"
 rm -f "$TAR"
 
-echo "== [4/5] Атомарная подмена на VPS =="
-ssh $O "$VPS" 'set -e
+echo "== [4/5] Подмена, смоук, автооткат (apply_release.sh) =="
+if ! ssh $O "$VPS" "set -e
+  cd /root/gb-deploy/maintenance
+  sed -i 's/\r\$//' apply_release.sh.new && mv apply_release.sh.new apply_release.sh
   rm -rf /root/gb-deploy/stage && mkdir -p /root/gb-deploy/stage
   tar -C /root/gb-deploy/stage -xzf /root/gb-deploy/server-app.tgz
-  test -f /root/gb-deploy/stage/app/main.py   # не подменяем битой распаковкой
-  # Корневые модули кладём ПЕРВЫМИ: приложение новое, а модуль под ним обязан
-  # быть тоже новым — иначе окно, в котором свежий app зовёт старый study_hours.
-  cp -r /root/gb-deploy/stage/root/. /root/gb-deploy/
-  rm -rf /root/gb-deploy/server/app.old
-  mv /root/gb-deploy/server/app /root/gb-deploy/server/app.old 2>/dev/null || true
-  mv /root/gb-deploy/stage/app /root/gb-deploy/server/app
-  rm -rf /root/gb-deploy/stage /root/gb-deploy/server-app.tgz
-  # Чужие .pyc от предыдущей версии переживают подмену каталога и однажды уже
-  # давали «поведение старого кода при новом файле».
-  find /root/gb-deploy -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
-  systemctl restart gradebook'
-
-echo "== [5/5] Проверка =="
-sleep 3
-ssh $O "$VPS" 'echo "  gradebook:" $(systemctl is-active gradebook); curl -s -m 10 -o /dev/null -w "  /health: %{http_code}\n" http://127.0.0.1:8000/health'
-echo "ГОТОВО. Если что-то не так — на VPS есть откат: mv /root/gb-deploy/server/app.old → app, systemctl restart gradebook."
+  rm -f /root/gb-deploy/server-app.tgz
+  bash apply_release.sh /root/gb-deploy/stage '$COMMIT' 'вручную: deploy-server.sh'
+  rm -rf /root/gb-deploy/stage"
+then
+  echo "ВЫКЛАДКА ОТКАЧЕНА — смотри причину выше. Код на бою прежний."
+  exit 1
+fi
+echo "== [5/5] Готово =="
+echo "ГОТОВО. Ручной откат, если понадобится: кнопка «Откат бэкап» или gb_restore.sh code на VPS."

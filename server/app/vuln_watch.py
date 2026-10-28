@@ -113,20 +113,68 @@ def find_python_vulns(pkgs: dict, fetch=_http_json) -> list:
     return found
 
 
-def kev_ids(fetch=_http_json) -> set:
-    """CVE из списка CISA «уже используют в атаках»; кэш на 12 часов."""
+#Что из нашего стека может появиться в списке CISA KEV: сверка по «производитель продукт».
+#Python-пакеты сверяются точно через OSV, этот список — про ОС и серверные программы.
+STACK = ("linux kernel", "ubuntu", "openssh", "openssl", "glibc", "sudo", "systemd",
+         "python", "caddy", "sqlite", "curl", "xz", "polkit", "apparmor", "fail2ban",
+         "pillow", "cryptography", "starlette", "fastapi", "uvicorn")
+KEV_FIELDS = ("cveID", "vendorProject", "product", "vulnerabilityName", "dateAdded")
+
+
+def kev_feed(fetch=_http_json) -> list:
+    """Список CISA «уже используют в атаках» (нужные поля); кэш на 12 часов."""
     path = os.path.join(STATE_DIR, "kev.json")
     try:
         if time.time() - os.path.getmtime(path) < KEV_TTL_S:
             with open(path, encoding="utf-8") as fh:
-                return set(json.load(fh))
-    except (OSError, ValueError):
+                cached = json.load(fh)
+            #Прежний кэш — голый список CVE; такой перекачиваем, иначе неделя без дат.
+            if cached and isinstance(cached[0], dict):
+                return cached
+    except (OSError, ValueError, IndexError):
         pass
-    ids = sorted({v.get("cveID") for v in fetch(KEV_URL, timeout=60).get("vulnerabilities") or []
-                  if v.get("cveID")})
+    feed = [{k: v.get(k) or "" for k in KEV_FIELDS}
+            for v in fetch(KEV_URL, timeout=60).get("vulnerabilities") or [] if v.get("cveID")]
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump(ids, fh)
-    return set(ids)
+        json.dump(feed, fh, ensure_ascii=False)
+    return feed
+
+
+def kev_ids(fetch=_http_json) -> set:
+    return {v["cveID"] for v in kev_feed(fetch)}
+
+
+def in_stack(entry: dict) -> bool:
+    name = ("%s %s" % (entry.get("vendorProject"), entry.get("product"))).lower()
+    return any(s in name for s in STACK)
+
+
+def kev_recent(feed: list, now: float, days: int = 7) -> list:
+    """Что CISA добавила за `days` дней: свежие эксплойты мира и задевают ли они нас."""
+    since = time.strftime("%Y-%m-%d", time.gmtime(now - days * 86400))
+    out = [{"cve": v["cveID"], "name": v.get("vulnerabilityName") or "",
+            "product": ("%s %s" % (v.get("vendorProject"), v.get("product"))).strip(),
+            "date": v.get("dateAdded") or "", "ours": in_stack(v)}
+           for v in feed if (v.get("dateAdded") or "") >= since]
+    out.sort(key=lambda x: x["date"], reverse=True)
+    out.sort(key=lambda x: not x["ours"])          # наш стек — первым, внутри — свежие сверху
+    return out
+
+
+def alarm_new_kev(recent: list, alerted: list, raise_alarm=None) -> list:
+    """Письмо сразу о дыре нашего стека, которую уже используют в атаках; одно на CVE."""
+    if raise_alarm is None:
+        from .alarm import raise_alarm
+    done = list(alerted)
+    for v in recent:
+        if v["ours"] and v["cve"] not in done:
+            raise_alarm("kev", "В атаках новая дыра: %s" % v["product"],
+                        ["%s — %s (в списке CISA с %s)" % (v["cve"], v["name"], v["date"]),
+                         "Исправления ОС и Caddy сторож ставит сам в течение часа, ядро "
+                         "встаёт после ночной перезагрузки. Итог — в вечерней сводке."],
+                        key="kev:%s" % v["cve"], cooldown=0)
+            done.append(v["cve"])
+    return done[-300:]
 
 
 def plan_upgrades(vulns: list) -> dict:
@@ -243,12 +291,24 @@ def main(argv=None) -> int:
     out: dict = {"checked_at": now, "errors": []}
 
     try:
-        kev = kev_ids()
+        feed = kev_feed()
     except Exception as e:      # noqa: BLE001 — без KEV проверка всё равно полезна
-        kev = set()
+        feed = []
         out["errors"].append("список CISA KEV не скачался: %s" % type(e).__name__)
+    kev = {v["cveID"] for v in feed}
+    recent = kev_recent(feed, now)
+    out["kev_total"] = len(feed)
+    out["kev_week"] = recent[:40]
+    out["kev_alerted"] = state.get("kev_alerted") or []
+    if feed and not dry:
+        if "kev_alerted" not in state:
+            #Первый запуск: уже известное за неделю — в сводку, а не пачкой писем разом.
+            out["kev_alerted"] = [v["cve"] for v in recent if v["ours"]]
+        else:
+            out["kev_alerted"] = alarm_new_kev(recent, out["kev_alerted"])
 
     pkgs = installed()
+    out["checked_python"] = len(pkgs)
     try:
         vulns = find_python_vulns(pkgs)
     except Exception as e:      # noqa: BLE001

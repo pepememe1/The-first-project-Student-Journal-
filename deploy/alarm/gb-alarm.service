@@ -1,0 +1,25 @@
+# GradeBookAI — сторож тревог (server/app/alarm_watch.py), 27.10.2026.
+# Письмо сразу: чужой вход на сервер, упавшая служба, правка ключей и учёток, приманка.
+# Кладётся в /etc/systemd/system/; окружение то же, что у службы gradebook.
+[Unit]
+Description=GradeBookAI alarm watch (intrusion, failed services, health)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/gb-deploy/server
+Environment=OPENSSL_CONF=/root/gb-deploy/gost-prov.cnf
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/gb-deploy/venv/bin/python -m app.alarm_watch
+# Сторож обязан жить всегда: умерший поток — выход с ошибкой и подъём заново.
+Restart=always
+RestartSec=5
+Nice=5
+# Потолок памяти: на машине 1 ГБ, и сторож не должен стать причиной падения журнала.
+MemoryMax=150M
+# При нехватке памяти сторож гибнет после фоновых задач: он должен успеть написать
+# (deploy/maintenance/oom/README.md).
+OOMScoreAdjust=-200
+
+[Install]
+WantedBy=multi-user.target

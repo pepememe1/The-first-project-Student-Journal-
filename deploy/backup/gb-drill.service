@@ -1,0 +1,14 @@
+# GradeBookAI — учения восстановления (gb_restore_drill.sh), 27.10.2026.
+[Unit]
+Description=GradeBookAI weekly restore drill (latest backup booted on :8091)
+After=network-online.target gradebook.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /root/gb-deploy/maintenance/gb_restore_drill.sh
+TimeoutStartSec=15min
+Nice=10
+# Второй экземпляр журнала на машине с 1 ГБ: потолок памяти и первым под нож при нехватке,
+# чтобы учения не вытеснили бой.
+MemoryMax=450M
+OOMScoreAdjust=500

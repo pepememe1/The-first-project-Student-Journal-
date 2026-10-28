@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Сервер GradeBookAI — шпаргалка</title>
+<style>
+  :root{--bg:#f4f7f8;--card:#fff;--text:#17262a;--muted:#5f7175;--line:#e1e9eb;--accent:#147c8b;
+        --code:#0b4f59;--codebg:#eaf4f5;--warn:#9a5b00;--warnbg:#fff4e0;--bad:#b4232a;--badbg:#fdeceb}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1719;--card:#162225;--text:#e6eef0;--muted:#93a7ab;
+        --line:#24363a;--accent:#3cc3d1;--code:#bdf1f6;--codebg:#0d2e33;--warn:#ffcf7a;--warnbg:#33270f;
+        --bad:#ff8f8a;--badbg:#3a1817}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 "Segoe UI",system-ui,sans-serif}
+  main{max-width:820px;margin:0 auto;padding:28px 16px 60px}
+  h1{font-size:26px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 22px}
+  section{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin:0 0 14px}
+  h2{font-size:18px;margin:0 0 10px}
+  ol,ul{margin:6px 0;padding-left:22px}
+  li{margin:4px 0}
+  code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13.5px;color:var(--code);background:var(--codebg);
+       border-radius:6px;padding:1px 6px}
+  .cmd{display:flex;align-items:center;gap:8px;background:var(--codebg);border-radius:10px;padding:8px 10px;margin:6px 0}
+  .cmd code{background:none;padding:0;flex:1;overflow-x:auto;white-space:nowrap}
+  .cmd button{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:8px;
+              padding:4px 10px;font:inherit;font-size:12.5px;cursor:pointer}
+  .note{background:var(--warnbg);color:var(--warn);border-radius:10px;padding:10px 12px;margin:10px 0 0}
+  .bad{background:var(--badbg);color:var(--bad)}
+  table{width:100%;border-collapse:collapse}
+  td{padding:8px 6px;border-top:1px solid var(--line);vertical-align:top}
+  td:first-child{width:38%;color:var(--muted)}
+  .btns{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+  .btn{border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .btn b{display:block;margin-bottom:2px}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+<main>
+<h1>Сервер GradeBookAI — шпаргалка</h1>
+<p class="sub">esstu-gradebook.ru · VPS reg.ru · составлено 27.10.2026</p>
+
+<section>
+<h2>Кнопки на рабочем столе</h2>
+<div class="btns">
+  <div class="btn"><b><span class="dot" style="background:#d63a3f"></span>Жесткий Рубильник</b>Закрывает весь сайт, API и админку страницей работ. Повторный запуск — открыть обратно.</div>
+  <div class="btn"><b><span class="dot" style="background:#147c8b"></span>Рестарт сервера</b>Перезапуск журнала (5–10 с), журнала и Caddy или всей машины — с проверкой, что поднялось.</div>
+  <div class="btn"><b><span class="dot" style="background:#e08a0b"></span>Откат бэкап</b>Вернуть прошлую выкладку кода или базу из ночной копии. Нынешняя база сохраняется.</div>
+  <div class="btn"><b><span class="dot" style="background:#26324a"></span>Консоль сервера</b>Открывает терминал уже внутри сервера (то же, что <code>ssh gb</code>).</div>
+</div>
+<p class="note">Каждая кнопка сначала показывает, что сейчас, и спрашивает «да / нет». Случайно ничего не сломается.</p>
+</section>
+
+<section>
+<h2>Как зайти на сервер по SSH</h2>
+<p><b>Пароль не нужен.</b> Вход по ключу: файл <code>C:\Users\yaros\.ssh\gb_vps_ed25519</code>
+(без парольной фразы). Адрес и пользователь записаны в <code>C:\Users\yaros\.ssh\config</code> под коротким именем <code>gb</code>.</p>
+<ol>
+  <li>Нажми <b>Win + X → Терминал</b> (или кнопку «Консоль сервера» и пропусти шаг 2).</li>
+  <li>Набери и нажми Enter:
+    <div class="cmd"><code>ssh gb</code><button>Копировать</button></div></li>
+  <li>Появится строка вида <code>root@cv7600409:~#</code> — ты на сервере, с правами root.</li>
+  <li>Выйти — <code>exit</code> или <b>Ctrl + D</b>.</li>
+</ol>
+<p>Полная форма без алиаса (с другого компьютера, где лежит ключ):</p>
+<div class="cmd"><code>ssh -i путь\к\gb_vps_ed25519 root@194.226.120.74</code><button>Копировать</button></div>
+<p class="note bad"><b>Ключ — единственный вход по SSH.</b> Сохрани копию файла <code>gb_vps_ed25519</code> в менеджер
+паролей или на флешку. Вход по паролю на сервере выключен намеренно: подобрать его нельзя.</p>
+</section>
+
+<section>
+<h2>Если SSH не пускает</h2>
+<ol>
+  <li>Зайди в панель reg.ru → твой VPS → <b>Консоль</b> (VNC в браузере).</li>
+  <li>Логин <code>gbadmin</code>, пароль — тот, что я присылал 27.10 (храни в менеджере паролей; на сервере его больше нет).
+      При вводе пароля символы не видны — это нормально.</li>
+  <li>Стать root: <code>sudo -i</code> (пароль второй раз не спросит).</li>
+  <li>Дальше — те же команды, что ниже.</li>
+</ol>
+<p class="note">Пароль <code>root</code> задавал reg.ru, нам он неизвестен. Понадобится — сброс в панели reg.ru.
+Вход в консоль сторож тревог тоже пришлёт письмом.</p>
+</section>
+
+<section>
+<h2>Команды на сервере</h2>
+<table>
+<tr><td>Жёсткий рубильник</td><td><div class="cmd"><code>bash /root/gb-deploy/maintenance/gb_maintenance.sh on</code><button>Копировать</button></div>
+  <code>off</code> — выключить, <code>status</code> — что сейчас</td></tr>
+<tr><td>Мягкий рубильник</td><td>Админка → «Сервер» → «Технические работы». Людям — страница работ, тебе — админка.</td></tr>
+<tr><td>Рестарт журнала</td><td><div class="cmd"><code>bash /root/gb-deploy/maintenance/gb_restart.sh</code><button>Копировать</button></div>
+  <code>all</code> — журнал и Caddy, <code>reboot</code> — вся машина</td></tr>
+<tr><td>Откат выкладки</td><td><div class="cmd"><code>bash /root/gb-deploy/maintenance/gb_restore.sh code</code><button>Копировать</button></div></td></tr>
+<tr><td>Копии базы / вернуть копию</td><td><div class="cmd"><code>bash /root/gb-deploy/maintenance/gb_restore.sh list</code><button>Копировать</button></div>
+  затем <code>gb_restore.sh db НОМЕР</code></td></tr>
+<tr><td>Работает ли журнал</td><td><div class="cmd"><code>systemctl status gradebook --no-pager</code><button>Копировать</button></div></td></tr>
+<tr><td>Ошибки журнала</td><td><div class="cmd"><code>journalctl -u gradebook -n 50 --no-pager</code><button>Копировать</button></div>
+  вживую: <code>journalctl -u gradebook -f</code>, выход — Ctrl + C</td></tr>
+<tr><td>Что видел сторож тревог</td><td><div class="cmd"><code>journalctl -u gb-alarm -n 30 --no-pager</code><button>Копировать</button></div></td></tr>
+<tr><td>Проверочное письмо-тревога</td><td><div class="cmd"><code>cd /root/gb-deploy/server && ../venv/bin/python -m app.alarm --test</code><button>Копировать</button></div></td></tr>
+<tr><td>Место на диске</td><td><code>df -h /</code></td></tr>
+<tr><td>Кто сейчас на сервере</td><td><code>who</code></td></tr>
+</table>
+</section>
+
+<section>
+<h2>Письма на почту</h2>
+<ul>
+  <li><b>Вечерняя сводка</b> — каждый день в 17:00 по колледжу: активность, приманки, состояние сервера, защита
+      (уязвимости, автообновления, тревоги за сутки).</li>
+  <li><b>Тревога</b> — сразу: вход на сервер чужим ключом или паролем, вход в консоль reg.ru, упавшая служба,
+      правка ключей и учёток, вход учёткой-приманкой, сайт не отвечает 3 минуты (сторож сам перезапустит и напишет,
+      когда поднялось), кончается диск.</li>
+</ul>
+<p class="note bad"><b>Пришло «Вход на сервер чужим ключом», а это не ты и не Влад:</b> зайди в консоль reg.ru,
+посмотри <code>cat /root/.ssh/authorized_keys</code>, удали чужую строку, смени пароль <code>gbadmin</code>
+(<code>passwd gbadmin</code>) и напиши мне — разберём журнал.</p>
+</section>
+
+<section>
+<h2>Чего не делать</h2>
+<ul>
+  <li>Не открывать в браузере служебные адреса сайта (<code>/.env</code>, <code>/wp-admin</code> и подобные):
+      это приманки, они забанят твой адрес на сутки.</li>
+  <li>Не класть пароли в файлы на сервере.</li>
+  <li>Не удалять файл <code>.gradebook_server.db.sync-anchor.json</code> рядом с базой.</li>
+</ul>
+</section>
+</main>
+<script>
+  document.querySelectorAll('.cmd button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var text = b.parentNode.querySelector('code').textContent;
+      navigator.clipboard.writeText(text).then(function () {
+        b.textContent = 'Скопировано';
+        setTimeout(function () { b.textContent = 'Копировать'; }, 1500);
+      });
+    });
+  });
+</script>
+</body>
+</html>

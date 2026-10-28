@@ -13,4 +13,6 @@ ExecStart=/root/gb-deploy/venv/bin/python -m app.nightly_report
 # Низкий приоритет: сводка не должна мешать журналу на одноядерной машине.
 Nice=10
 IOSchedulingClass=idle
+# Разовая задача — первой под нож при нехватке памяти (deploy/maintenance/oom/README.md).
+OOMScoreAdjust=500
 TimeoutStartSec=600

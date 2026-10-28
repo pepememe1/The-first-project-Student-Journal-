@@ -40,6 +40,19 @@ cat /var/log/gb-backup.log
 systemctl list-timers gb-backup.timer  # когда следующий запуск
 ```
 
+## Как вернуть базу из копии
+
+```bash
+bash /root/gb-deploy/maintenance/gb_restore.sh list          # копии, время колледжа
+bash /root/gb-deploy/maintenance/gb_restore.sh db 3 --dry    # проверить копию, ничего не меняя
+bash /root/gb-deploy/maintenance/gb_restore.sh db 3          # вернуть
+```
+
+Скрипт проверяет копию ключом (`integrity_check`), на время подмены включает жёсткий
+рубильник, нынешнюю базу уносит в `/root/gb-backups/pre-restore-*` (она сама появится в
+`list`), якорь синка не трогает (§4.45), а если журнал с копией не поднялся — возвращает
+прежнюю базу. `gb_restore.sh code` — то же для кода: прежняя выкладка сервера и сайта.
+
 ## Чего этот бэкап НЕ закрывает (честно)
 
 - **Off-box.** Снимки лежат на той же машине. Пожар/потеря диска → потеря и базы, и

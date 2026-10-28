@@ -13,3 +13,5 @@ Environment=OPENSSL_CONF=/root/gb-deploy/gost-prov.cnf
 ExecStart=/root/gb-deploy/venv/bin/python -m app.vuln_watch
 TimeoutStartSec=45min
 Nice=10
+# Разовая задача — первой под нож при нехватке памяти (deploy/maintenance/oom/README.md).
+OOMScoreAdjust=500

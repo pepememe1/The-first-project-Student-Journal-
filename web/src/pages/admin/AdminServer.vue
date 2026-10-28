@@ -458,7 +458,8 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
             <p class="text-sm text-text3">
               {{ locale.t('adminServer.requestsLine', { rps: reqLoad.requests_per_s, ms: reqLoad.mean_response_ms, inflight: reqLoad.mean_in_flight }) }}
             </p>
-            <p class="mt-1 text-sm" :class="reqLoad.warn ? 'font-medium text-orange' : 'text-text3'">
+            <!-- Первую минуту после старта загрузки нет (null): окно слишком короткое. -->
+            <p v-if="reqLoad.cpu_utilization != null" class="mt-1 text-sm" :class="reqLoad.warn ? 'font-medium text-orange' : 'text-text3'">
               {{ locale.t('adminServer.cpuLine', { pct: Math.round(reqLoad.cpu_utilization * 100), factor: reqLoad.queue_factor ?? '∞' }) }}
             </p>
             <p v-if="reqLoad.db_share !== null && reqLoad.db_share !== undefined" class="mt-1 text-sm text-text3">

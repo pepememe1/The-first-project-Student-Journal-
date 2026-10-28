@@ -131,8 +131,11 @@ def updater_env(tmp_path, monkeypatch):
     monkeypatch.setenv("GRADEBOOK_APP_DIR", str(tmp_path))
     monkeypatch.setenv("GRADEBOOK_DATA_DIR", str(tmp_path / "data"))
     (tmp_path / "data").mkdir(exist_ok=True)
+    #Через monkeypatch, а не pop: после теста прежний модуль возвращается. Иначе следующие
+    #тесты подменяли путь у новой копии app_paths, а data.device_key читал старую — и на
+    #машине разработчика находил настоящий файл ключа, а в CI заводил новый (28.10.2026).
     for mod in ("app_paths", "updater"):
-        sys.modules.pop(mod, None)
+        monkeypatch.delitem(sys.modules, mod, raising=False)
     from data import updater
     import app_paths
     monkeypatch.setattr(app_paths, "data_dir", lambda: str(tmp_path / "data"))

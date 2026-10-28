@@ -26,6 +26,7 @@ Gmail, то есть лежит у Google LLC — иностранного ли�
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -39,12 +40,22 @@ _TZ = college_clock.TZ
 
 #Сторож уязвимостей ходит раз в час; три часа тишины — таймер встал или OSV недоступен.
 VULNWATCH_MAX_AGE_H = 3
+#Сторож тревог отмечается раз в минуту; десять минут тишины — он завис.
+ALARM_MAX_SILENCE_MIN = 10
 
 #Пороги «требует внимания». Каждый — про потерю данных или доступности, а не косметику.
 DISK_MIN_FREE_PCT = 15          #ниже — бэкап начнёт пропускать снимки (нужно 1.5× базы)
 MEM_MIN_AVAIL_MB = 120          #ниже — torch Silero уводит машину в своп
 BACKUP_MAX_AGE_H = 30           #копия раз в сутки; больше 30 ч — пропущена
 CERT_MIN_DAYS = 14              #Caddy продлевает за 30 дней; 14 — значит, продление встало
+OFFSITE_MAX_AGE_D = 7           #ПК забирает копию, когда включён; неделя без копии — давно выключен
+DRILL_MAX_AGE_D = 9             #учения раз в неделю; девять дней — таймер встал
+
+#Итоги ночных задач обслуживания (deploy/backup, deploy/maintenance) — их пишут сами скрипты.
+OPS_FILES = {"offsite": "/var/lib/gb-backup/offsite.json",
+             "drill": "/var/lib/gb-backup/drill.json",
+             "os_update": "/var/lib/gb-os-update/last.json"}
+FAIL2BAN_JAILS = {"day": "caddy-scanner", "week": "gb-scanner-week"}
 
 def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds")
@@ -279,7 +290,8 @@ def _server(db) -> dict:
     except Exception as e:      # noqa: BLE001
         out["audit_chain"] = "не проверено (%s)" % type(e).__name__
     out["services"] = {name: (_run(["systemctl", "is-active", name]).strip() or "?")
-                       for name in ("gradebook", "caddy", "fail2ban", "gb-backup.timer")}
+                       for name in ("gradebook", "caddy", "fail2ban", "gb-backup.timer",
+                                    "gb-alarm")}
     out["backup"] = _backup_state()
     out["site"] = _site_health(config.SITE_URL or "https://esstu-gradebook.ru")
     host = (config.SITE_URL or "").split("://", 1)[-1].split("/", 1)[0].split(":")[0]
@@ -292,17 +304,52 @@ def _server(db) -> dict:
 
 def _security(now: float) -> dict:
     """Что нашёл и поставил сторож уязвимостей (`vuln_watch`, раз в час) за сутки."""
-    from . import vuln_watch
+    from . import alarm, vuln_watch
     st = vuln_watch.read_state()
+    alarms = alarm.summary(now)
     if not st:
-        return {"known": False}
-    return {"known": True,
+        return {"known": False, "alarms": alarms}
+    return {"known": True, "alarms": alarms,
             "age_h": round((now - float(st.get("checked_at") or 0)) / 3600, 1),
             "open": [{k: v.get(k) for k in ("package", "version", "id", "fixed", "kev", "summary")}
                      for v in st.get("python") or []],
             "actions": [h for h in st.get("history") or [] if (h.get("ts") or 0) >= now - 86400],
             "errors": st.get("errors") or [],
-            "hold": sorted(vuln_watch.HOLD)}
+            "hold": sorted(vuln_watch.HOLD),
+            "checked_python": st.get("checked_python"),
+            "kev_total": st.get("kev_total"),
+            "kev_week": st.get("kev_week") or []}
+
+
+def _read_json(path: str) -> dict | None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _banned(jail: str) -> int | None:
+    out = _run(["fail2ban-client", "status", jail])
+    for line in out.splitlines():
+        if "Currently banned:" in line:
+            return int(line.rsplit(":", 1)[1].strip() or 0)
+    return None
+
+
+def _ops(now: float) -> dict:
+    """Копия базы вне машины, учения восстановления, обновление ОС и баны сканеров."""
+    out: dict = {}
+    for name, path in OPS_FILES.items():
+        st = _read_json(path)
+        if st is None:
+            out[name] = {"known": False}
+            continue
+        out[name] = {**st, "known": True,
+                     "age_d": round((now - float(st.get("ts") or 0)) / 86400, 1)}
+    out["bans"] = {k: _banned(j) for k, j in FAIL2BAN_JAILS.items()}
+    return out
 
 
 def collect(db, now: float | None = None) -> dict:
@@ -313,7 +360,8 @@ def collect(db, now: float | None = None) -> dict:
     for name, fn in (("activity", lambda: _activity(db, since, now)),
                      ("honeypot", lambda: _honeypot(db, since, now)),
                      ("server", lambda: _server(db)),
-                     ("security", lambda: _security(now))):
+                     ("security", lambda: _security(now)),
+                     ("ops", lambda: _ops(now))):
         try:
             data[name] = fn()
         except Exception as e:      # noqa: BLE001
@@ -327,7 +375,7 @@ def alerts(d: dict) -> list:
     """Что требует внимания. Пусто — «всё в порядке» в теме письма."""
     out = []
     s, hp = d.get("server") or {}, d.get("honeypot") or {}
-    for part in ("activity", "honeypot", "server", "security"):
+    for part in ("activity", "honeypot", "server", "security", "ops"):
         if (d.get(part) or {}).get("error"):
             out.append("Не собрался раздел «%s»: %s" % (part, d[part]["error"]))
     disk = s.get("disk") or {}
@@ -361,6 +409,14 @@ def alerts(d: dict) -> list:
     if s.get("reboot_required"):
         out.append("Система просит перезагрузку после обновлений")
     sec = d.get("security") or {}
+    al = sec.get("alarms") or {}
+    if al.get("known"):
+        age = al.get("heartbeat_age_min")
+        if age is None or age > ALARM_MAX_SILENCE_MIN:
+            out.append("Сторож тревог молчит%s — письма о взломе и падениях не придут, "
+                       "проверь gb-alarm" % (" %.0f мин" % age if age is not None else ""))
+        if al.get("pending"):
+            out.append("Тревог не доставлено почтой: %d — проверь SMTP" % al["pending"])
     if sec.get("known"):
         if sec.get("age_h", 0) > VULNWATCH_MAX_AGE_H:
             out.append("Сторож уязвимостей не запускался %.0f ч — проверь gb-vulnwatch.timer"
@@ -374,14 +430,43 @@ def alerts(d: dict) -> list:
             elif v.get("fixed") and v["package"] not in (sec.get("hold") or []):
                 out.append("Дыра %s в %s %s: исправление %s есть, но не встало само"
                            % (v["id"], v["package"], v["version"], v["fixed"]))
-        for h in sec.get("actions") or []:
+        #Тревога — только если ПОСЛЕДНЯЯ попытка своего вида не прошла: сбой, за которым
+        #уже прошла удачная, исправлен, а «требует внимания» на него учило бы не верить теме.
+        last: dict = {}
+        for h in sorted(sec.get("actions") or [], key=lambda x: x.get("ts") or 0):
+            last[h.get("kind")] = h
+        for h in last.values():
             if not h.get("ok"):
                 out.append("Автообновление не прошло: %s" % h.get("detail"))
         for e in sec.get("errors") or []:
             out.append("Сторож уязвимостей: %s" % e)
+    out += _ops_alerts(d.get("ops") or {})
     if hp.get("honeytoken"):
         out.append("🍯 Вход под учёткой-приманкой (%d) — значит, утёк дамп базы или файл "
                    "окружения" % hp["honeytoken"])
+    return out
+
+
+def _ops_alerts(ops: dict) -> list:
+    """Обещания обслуживания, которые не выполняются: копии вне машины нет, учения не идут."""
+    out = []
+    off = ops.get("offsite") or {}
+    if ops and not off.get("known"):
+        out.append("Копии базы вне сервера ещё нет — включи ПК администратора, он заберёт её сам")
+    elif off.get("age_d", 0) > OFFSITE_MAX_AGE_D:
+        out.append("Копии базы на ПК %.0f дн. — включи ПК администратора, он заберёт свежую сам"
+                   % off["age_d"])
+    drill = ops.get("drill") or {}
+    if ops and not drill.get("known"):
+        out.append("Учений восстановления ещё не было — проверь gb-drill.timer")
+    elif drill.get("known") and not drill.get("ok"):
+        out.append("Учения восстановления не прошли: %s" % drill.get("detail"))
+    elif drill.get("age_d", 0) > DRILL_MAX_AGE_D:
+        out.append("Учений восстановления не было %.0f дн. — проверь gb-drill.timer"
+                   % drill["age_d"])
+    upd = ops.get("os_update") or {}
+    if upd.get("known") and not upd.get("ok"):
+        out.append("Недельное обновление ОС не прошло: %s" % (upd.get("error") or "без причины"))
     return out
 
 

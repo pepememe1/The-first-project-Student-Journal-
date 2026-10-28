@@ -1,3 +1,6 @@
 # Хуки git исполняет sh: с концами строк CRLF (core.autocrlf=true на Windows) скрипт
 # падает на первой же строке, и проверка молча перестаёт работать.
 tools/git-hooks/* text eol=lf
+# Скрипты, которые исполняет bash на сервере и в CI: CRLF там — «$'\r': command not found».
+*.sh text eol=lf
+deploy/ci/gb-ci-deploy text eol=lf

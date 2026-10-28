@@ -14,8 +14,10 @@ def fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(device_key, "_cache", None)
     monkeypatch.setattr(device_key, "_reason", "")
     path = tmp_path / "local_app.key"
-    import app_paths
-    monkeypatch.setattr(app_paths, "data_file", lambda name: str(path))
+    #Подменяем тот app_paths, которым пользуется сам device_key, а не тот, что сейчас в
+    #sys.modules: другой тест мог подложить туда новую копию, и тогда проверка шла бы по
+    #настоящему файлу ключа машины (28.10.2026, краснело только в CI).
+    monkeypatch.setattr(device_key.app_paths, "data_file", lambda name: str(path))
     return path
 
 

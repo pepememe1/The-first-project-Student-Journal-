@@ -205,6 +205,11 @@ def ip_fingerprint(ip: str) -> str:
 #    прошедший пятьсот путей, выталкивал оттуда собственные первые попадания;
 #  • его не видел `verify_audit.py`, то есть доказать факт сканирования было нечем.
 #
+#Метка строки журнала службы о входе учёткой-приманкой: по ней сторож тревог
+#(`alarm_watch`) шлёт письмо сразу, а не в вечерней сводке.
+HONEYTOKEN_MARK = "[canary] HONEYTOKEN"
+
+
 #⚠️ Детектор, чей сигнал не переживает перезапуск, детектором не является. Пишем в ОБА
 #места: `audit.log` сам дублирует запись в живой мониторинг, поэтому консоль
 #администратора ничего не теряет.
@@ -262,6 +267,10 @@ def record_hit(method: str, path: str, ip: str, *, action: str = "canary.hit",
         audit.log(db, actor="", role="", action=action,
                   target=path, detail=method,
                   level=level, ip=ip_fingerprint(ip))
+        if action == "canary.honeytoken":
+            from .events import one_line
+            print("%s %s %s" % (HONEYTOKEN_MARK, ip_fingerprint(ip), one_line(path)[:80]),
+                  flush=True)
     finally:
         try:
             db.close()

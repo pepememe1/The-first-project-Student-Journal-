@@ -58,15 +58,16 @@ CANDIDATES = 500
 _TRIGGERS = ("messages_fts_ai", "messages_fts_au", "messages_fts_ad",
              "messages_trgm_ai", "messages_trgm_au", "messages_trgm_ad")
 #«ё» → «е» внутри базы: FTS5 сам этого не делает, а люди пишут то так, то так.
-_FOLD_SQL = "replace(replace({0}, 'ё', 'е'), 'Ё', 'Е')"
+# DDL ниже собирается только из этой константы, ввода в нём нет — отсюда nosec B608.
+_FOLD_SQL ="replace(replace({0}, 'ё', 'е'), 'Ё', 'Е')"
 _DDL = [
     "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5("
     "body, conversation_id UNINDEXED, tokenize = 'unicode61 remove_diacritics 2')",
-    "CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages "
+    "CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages "  # nosec B608
     "WHEN new.deleted_at = '' AND new.kind = 'text' BEGIN "
     "INSERT INTO messages_fts(rowid, body, conversation_id) "
     f"VALUES (new.id, {_FOLD_SQL.format('new.body')}, new.conversation_id); END",
-    "CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE OF body, deleted_at, kind "
+    "CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE OF body, deleted_at, kind "  # nosec B608
     "ON messages BEGIN DELETE FROM messages_fts WHERE rowid = old.id; "
     "INSERT INTO messages_fts(rowid, body, conversation_id) "
     f"SELECT new.id, {_FOLD_SQL.format('new.body')}, new.conversation_id "
@@ -75,11 +76,11 @@ _DDL = [
     "DELETE FROM messages_fts WHERE rowid = old.id; END",
     "CREATE VIRTUAL TABLE IF NOT EXISTS messages_trgm USING fts5("
     "body, conversation_id UNINDEXED, tokenize = 'trigram remove_diacritics 1')",
-    "CREATE TRIGGER IF NOT EXISTS messages_trgm_ai AFTER INSERT ON messages "
+    "CREATE TRIGGER IF NOT EXISTS messages_trgm_ai AFTER INSERT ON messages "  # nosec B608
     "WHEN new.deleted_at = '' AND new.kind = 'text' BEGIN "
     "INSERT INTO messages_trgm(rowid, body, conversation_id) "
     f"VALUES (new.id, {_FOLD_SQL.format('new.body')}, new.conversation_id); END",
-    "CREATE TRIGGER IF NOT EXISTS messages_trgm_au AFTER UPDATE OF body, deleted_at, kind "
+    "CREATE TRIGGER IF NOT EXISTS messages_trgm_au AFTER UPDATE OF body, deleted_at, kind "  # nosec B608
     "ON messages BEGIN DELETE FROM messages_trgm WHERE rowid = old.id; "
     "INSERT INTO messages_trgm(rowid, body, conversation_id) "
     f"SELECT new.id, {_FOLD_SQL.format('new.body')}, new.conversation_id "
@@ -89,11 +90,11 @@ _DDL = [
 ]
 _REBUILD = [
     "DELETE FROM messages_fts",
-    "INSERT INTO messages_fts(rowid, body, conversation_id) "
+    "INSERT INTO messages_fts(rowid, body, conversation_id) "  # nosec B608
     f"SELECT id, {_FOLD_SQL.format('body')}, conversation_id FROM messages "
     "WHERE deleted_at = '' AND kind = 'text'",
     "DELETE FROM messages_trgm",
-    "INSERT INTO messages_trgm(rowid, body, conversation_id) "
+    "INSERT INTO messages_trgm(rowid, body, conversation_id) "  # nosec B608
     f"SELECT id, {_FOLD_SQL.format('body')}, conversation_id FROM messages "
     "WHERE deleted_at = '' AND kind = 'text'",
 ]

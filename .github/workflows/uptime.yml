@@ -1,0 +1,38 @@
+name: Сайт снаружи
+
+# Внешний пинг (28.10.2026). Сторож тревог живёт на той же машине: ляжет машина целиком —
+# ляжет и он, и письма не будет. Эта проверка смотрит снаружи, глазами пользователя.
+# Не ответил /health три раза подряд с минутой между попытками — прогон красный, и GitHub
+# присылает письмо тому, кто последним правил этот файл.
+#
+# ⚠️ Расписание GitHub исполняет ТОЛЬКО на ветке по умолчанию: пока файла нет там, проверка
+# не идёт. Для публичного репозитория минуты Actions бесплатны; один прогон — секунды.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: uptime
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    name: /health снаружи
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - name: Три попытки
+        run: |
+          for i in 1 2 3; do
+            code=$(curl -s -m 20 -o /dev/null -D headers.txt -w "%{http_code}" https://esstu-gradebook.ru/health || true)
+            # Плановые работы (рубильник) — 503 со своим заголовком, это не падение.
+            if [ "$code" = 200 ] || { [ "$code" = 503 ] && grep -qi "x-gb-reason: maintenance" headers.txt; }; then
+              echo "сайт отвечает: $code"
+              exit 0
+            fi
+            echo "попытка $i: код ${code:-нет ответа}"
+            [ "$i" = 3 ] || sleep 60
+          done
+          echo "::error title=Сайт не отвечает снаружи::/health не ответил трижды за 2 минуты"
+          exit 1

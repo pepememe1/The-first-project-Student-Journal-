@@ -121,6 +121,15 @@ esstu-gradebook.ru {
 	# именованным матчером — такие идут в порядке записи. Файлы самой страницы отдаются с
 	# кодом 200: часть браузеров не рисует картинку из ответа 503. X-Gb-Reason — чтобы
 	# приложение на телефоне узнало работы и показало эту страницу, а не «нет сети».
+	# Запросы из Cloudflare Workers обрываем без ответа (28.10.2026). Через них ходят
+	# сканеры «каждый день» — за неделю 80 адресов Cloudflare с /wp-admin/install.php, —
+	# а человек с браузером через чужой Worker к журналу не приходит. Банить сами адреса
+	# надолго нельзя: их делят все, кто идёт через Cloudflare (gb-scanner-week.conf).
+	@cfworker header Cf-Worker *
+	handle @cfworker {
+		abort
+	}
+
 	@maintenance file {
 		root /var/www/gb-maintenance
 		try_files /maintenance.on

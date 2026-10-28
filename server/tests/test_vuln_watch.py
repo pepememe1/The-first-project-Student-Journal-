@@ -102,6 +102,19 @@ def test_the_evening_report_names_exploited_holes_and_failed_patches():
     assert nightly_report.alerts({"security": {"known": False}}) == []
 
 
+def test_a_failed_patch_fixed_by_a_later_run_is_not_an_alert():
+    def alerts(actions):
+        d = {"security": {"known": True, "age_h": 0.5, "hold": [], "errors": [], "open": [],
+                          "actions": actions}}
+        return [a for a in nightly_report.alerts(d) if "Автообновление" in a]
+    fail = {"ok": False, "kind": "os", "detail": "error", "ts": 100}
+    good = {"ok": True, "kind": "os", "detail": "libbrotli1", "ts": 200}
+    assert alerts([fail, good]) == []
+    assert len(alerts([good, dict(fail, ts=300)])) == 1
+    #Удачный запуск другого вида сбой не гасит.
+    assert len(alerts([fail, dict(good, kind="python")])) == 1
+
+
 def test_the_letter_shows_what_the_watch_patched(monkeypatch):
     import time
     from app import report_mail
@@ -118,3 +131,40 @@ def test_the_letter_shows_what_the_watch_patched(monkeypatch):
     block = report_mail._security_block(sec)
     assert "certifi 2026.6.17 → 2026.10.19" in block and "исправления пока нет" in block
     assert "certifi" in report_mail.render_text({"now": now, "security": sec})
+
+
+_FEED = [
+    {"cveID": "CVE-2026-1", "vendorProject": "OpenBSD", "product": "OpenSSH",
+     "vulnerabilityName": "OpenSSH RCE", "dateAdded": "2026-10-26"},
+    {"cveID": "CVE-2026-2", "vendorProject": "Microsoft", "product": "Exchange",
+     "vulnerabilityName": "Exchange RCE", "dateAdded": "2026-10-27"},
+    {"cveID": "CVE-2025-3", "vendorProject": "Caddy", "product": "Caddy",
+     "vulnerabilityName": "старая", "dateAdded": "2025-01-01"},
+]
+_NOW = 1_793_200_000.0       # 28.10.2026 (UTC)
+
+
+def test_world_exploits_of_the_week_put_our_stack_first():
+    recent = vuln_watch.kev_recent(_FEED, _NOW)
+    assert [v["cve"] for v in recent] == ["CVE-2026-1", "CVE-2026-2"]
+    assert [v["ours"] for v in recent] == [True, False]
+    assert not vuln_watch.in_stack({"vendorProject": "Microsoft", "product": "Exchange"})
+
+
+def test_one_letter_per_new_exploit_of_our_stack():
+    sent = []
+    recent = vuln_watch.kev_recent(_FEED, _NOW)
+    done = vuln_watch.alarm_new_kev(recent, [], lambda *a, **k: sent.append(k["key"]))
+    assert sent == ["kev:CVE-2026-1"] and done == ["CVE-2026-1"]
+    vuln_watch.alarm_new_kev(recent, done, lambda *a, **k: sent.append(k["key"]))
+    assert sent == ["kev:CVE-2026-1"]
+
+
+def test_the_letter_counts_checked_packages_and_world_exploits():
+    from app import report_mail
+    sec = {"known": True, "open": [], "actions": [], "checked_python": 87, "kev_total": 1500,
+           "kev_week": vuln_watch.kev_recent(_FEED, _NOW)}
+    block = report_mail._security_block(sec)
+    assert "проверено 87" in block and "наш стек: 1" in block and "OpenSSH RCE" in block
+    text = report_mail.render_text({"now": _NOW, "security": sec})
+    assert "проверено: 87" in text and "наш стек: 1" in text

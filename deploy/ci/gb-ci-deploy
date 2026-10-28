@@ -1,0 +1,65 @@
+#!/bin/bash
+# /usr/local/sbin/gb-ci-deploy — вход автодеплоя из CI (28.10.2026).
+#
+# Ключ CI на сервере умеет только это. В authorized_keys пользователя gbci стоит
+#   restrict,command="sudo -n /usr/local/sbin/gb-ci-deploy \"$SSH_ORIGINAL_COMMAND\""
+# — ни консоли, ни пересылки портов, ни scp. sudo разрешает gbci ровно этот файл
+# (/etc/sudoers.d/gb-ci), а сам файл принадлежит root и gbci его не перепишет.
+#
+#   status                 что сейчас на бою (/root/gb-deploy/DEPLOYED.json)
+#   deploy <коммит> <sha>  архив релиза со stdin → хеш архива → манифест (коммит, чистое
+#                          дерево, хеш каждого файла) → apply_release.sh
+set -uo pipefail
+D=/root/gb-deploy
+CMD=${1:-}
+
+case "$CMD" in
+  status)
+    cat "$D/DEPLOYED.json" 2>/dev/null || echo '{}'
+    ;;
+  deploy\ *)
+    read -r _ commit sha extra <<<"$CMD"
+    if [[ ! "$commit" =~ ^[0-9a-f]{40}$ || ! "$sha" =~ ^[0-9a-f]{64}$ || -n "${extra:-}" ]]; then
+      echo "ожидается: deploy <коммит из 40 hex> <sha256>" >&2
+      exit 2
+    fi
+    exec 9>/run/gb-ci-deploy.lock
+    flock -n 9 || { echo "выкладка уже идёт" >&2; exit 3; }
+    in=$(mktemp -d "$D/ci-XXXXXX")
+    trap 'rm -rf "$in"' EXIT
+    head -c 209715200 > "$in/release.tgz"        # 200 МБ — потолок, архив весит ~6 МБ
+    if [ "$(sha256sum "$in/release.tgz" | cut -d' ' -f1)" != "$sha" ]; then
+      echo "хеш архива не совпал — архив дошёл не целиком, на бою ничего не тронуто" >&2
+      exit 4
+    fi
+    mkdir "$in/stage"
+    tar -C "$in/stage" --no-same-owner -xzf "$in/release.tgz" || exit 4
+    "$D/venv/bin/python" - "$in/stage" "$commit" <<'PYEOF' || exit 5
+import hashlib, json, os, sys
+stage, commit = sys.argv[1:3]
+m = json.load(open(os.path.join(stage, "MANIFEST.json"), encoding="utf-8"))
+if m.get("commit") != commit:
+    sys.exit("коммит в манифесте %s, а прислан %s" % (m.get("commit"), commit))
+if m.get("dirty_worktree"):
+    sys.exit("архив собран из грязного дерева — на бой такой не идёт")
+for rel, h in m["files"].items():
+    with open(os.path.join(stage, rel), "rb") as fh:
+        if hashlib.sha256(fh.read()).hexdigest() != h:
+            sys.exit("хеш файла не совпал с манифестом: " + rel)
+print("манифест сверен: %d файлов, коммит %s" % (len(m["files"]), commit[:12]))
+PYEOF
+    # Обрыв связи с CI (новый пуш отменил прогон) не должен убить выкладку на полпути:
+    # отбой и запись в закрытую трубу игнорируем, вывод — в журнал, клиенту — в конце.
+    trap '' HUP PIPE
+    log=/var/log/gb-ci-deploy.log
+    echo "── $(date -Is) CI ${commit:0:12}" >> "$log"
+    bash "$D/maintenance/apply_release.sh" "$in/stage" "$commit" "CI: GitHub Actions" >> "$log" 2>&1
+    rc=$?
+    tail -n 20 "$log"
+    exit $rc
+    ;;
+  *)
+    echo "разрешено только: status | deploy <коммит> <sha256>" >&2
+    exit 2
+    ;;
+esac

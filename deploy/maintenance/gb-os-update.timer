@@ -1,0 +1,12 @@
+# Ночь на воскресенье по Улан-Удэ: машина живёт по Москве, зона указана прямо здесь.
+# 04:00 — после уборки кэшей (03:30), до учений восстановления (05:00).
+[Unit]
+Description=GradeBookAI weekly OS update, Sunday 04:00 Asia/Irkutsk
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00 Asia/Irkutsk
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

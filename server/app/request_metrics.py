@@ -38,6 +38,10 @@ SAMPLE_LIMIT = 256
 ROUTE_LIMIT = 512
 #Загрузка выше этой — предупреждение: дальше задержка растёт не линейно, а как 1/(1 − ρ).
 RHO_WARN = 0.7
+#Окно короче минуты загрузку не показывает: сразу после первого запроса в окне микросекунды,
+#и точные часы Linux дают ~100 % от одного прохода цикла. На Windows это прятал шаг часов
+#процесса в 15 мс — тест краснел только в CI (28.10.2026).
+RHO_MIN_WINDOW_S = 60
 
 #[мс базы, число SQL-запросов] текущего HTTP-запроса; None — вне запроса (старт, фон).
 _db_time: ContextVar = ContextVar("gb_request_db_time", default=None)
@@ -142,7 +146,8 @@ class RequestMetrics:
                     **ci,
                 })
             wall = max(time() - self._started, 1e-9)
-            rho = min(1.0, max(0.0, (process_time() - self._cpu_started) / wall))
+            rho = (min(1.0, max(0.0, (process_time() - self._cpu_started) / wall))
+                   if wall >= RHO_MIN_WINDOW_S else None)
             arrival = requests / wall
             mean_s = (duration_ms / requests / 1000) if requests else 0.0
             return {"scope": "process", "started_at_unix": self._started,
@@ -152,10 +157,11 @@ class RequestMetrics:
                         "mean_response_ms": round(mean_s * 1000, 2),
                         #Закон Литтла: сколько запросов в среднем одновременно в работе.
                         "mean_in_flight": round(arrival * mean_s, 4),
-                        "cpu_utilization": round(rho, 4),
+                        "cpu_utilization": round(rho, 4) if rho is not None else None,
                         #M/M/1: во сколько раз ожидание длиннее чистой работы при такой загрузке.
-                        "queue_factor": round(1 / (1 - rho), 2) if rho < 0.999 else None,
-                        "warn": rho > RHO_WARN,
+                        "queue_factor": round(1 / (1 - rho), 2)
+                        if rho is not None and rho < 0.999 else None,
+                        "warn": rho is not None and rho > RHO_WARN,
                         "db_share": round(db_ms / duration_ms, 3) if duration_ms else None,
                     },
                     "routes": rows}

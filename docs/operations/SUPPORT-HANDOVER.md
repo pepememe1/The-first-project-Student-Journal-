@@ -55,6 +55,22 @@ journalctl -u gradebook -n 50 --no-pager                # предупрежде
 | каждую ночь, 02:00 | исправления безопасности ОС; перезагрузка, если её требует ядро или libc | `deploy/maintenance/52gradebook-unattended`, drop-in таймера `apt-daily-upgrade` |
 | ночь на воскресенье, 03:30 | уборка кэшей: скачанные пакеты, кэш pip, OTA-бандлы кроме текущего и трёх прежних | `deploy/maintenance/gb_cleanup.sh` + `gb-cleanup.timer` |
 | раз в месяц | ротация журналов наших скриптов (`gb-backup.log`, `gb-cleanup.log`), год истории | `deploy/maintenance/logrotate-gradebook` |
+| каждый час | уязвимости пакетов Python, ОС и Caddy по OSV и CISA KEV, исправление сразу с откатом | `deploy/vulnwatch/` |
+| постоянно | письмо сразу: чужой вход на сервер, упавшая служба, правка ключей и учёток, приманка; журнал или сайт молчат 3 минуты — перезапуск и письмо | `deploy/alarm/` (служба `gb-alarm`) |
+| при падении | Caddy поднимается сам через 3 секунды (у пакетного юнита `Restart=no`) | `deploy/maintenance/caddy-restart.conf` |
+| ночь на воскресенье, 04:00 | все обновления ОС, не только безопасности; перезагрузка, если нужна | `deploy/maintenance/gb_os_update.sh` + `gb-os-update.timer` |
+| воскресенье, 05:00 | учения: свежая копия базы поднимается рядом с боем на :8091 и проверяется | `deploy/backup/gb_restore_drill.sh` + `gb-drill.timer` |
+| при входе в Windows и каждые 6 ч | ПК администратора забирает ночную копию (и секреты под DPAPI) в `D:\GradeBookAI-backups` | `tools/server-buttons/offsite_pull.ps1`, `deploy/backup/gb_offsite.sh` |
+| первый запрос к `.php`, `wp-admin`, `.env` | бан на сутки (только 80/443); вернулся в течение недели — бан на неделю | `server/deploy/infra/` (fail2ban `caddy-scanner`, `gb-scanner-week`) |
+| при нехватке памяти | первыми гибнут разовые задачи, последними — журнал, Caddy, ssh, сторож | `deploy/maintenance/oom/` |
+| пуш в `Release-*`, всё зелёное | автодеплой проверенного архива, смоук и откат на сервере, письмо | `deploy/ci/README.md` |
+| каждые 15 минут | GitHub проверяет `/health` снаружи | `.github/workflows/uptime.yml` (работает с ветки по умолчанию) |
+
+Руками, когда нужно (их же зовут кнопки на рабочем столе, `tools/server-buttons/install.py`):
+`deploy/maintenance/gb_maintenance.sh on|off` — жёсткий рубильник работ,
+`deploy/maintenance/gb_restart.sh [all|reboot]` — рестарт с проверкой,
+`deploy/backup/gb_restore.sh list | db N | code` — база из копии или прежняя выкладка. На бою
+все три лежат в `/root/gb-deploy/maintenance/`.
 
 Прежние OTA-бандлы — только запись того, что стояло на телефонах: откатиться на них
 правкой `latest.json` нельзя (он подписан, а телефон не ставит бандл не новее своего).

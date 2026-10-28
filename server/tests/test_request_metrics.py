@@ -150,6 +150,11 @@ def test_startup_cpu_does_not_count_as_load():
     m._cpu_started -= 10         # …все на процессоре
     m.enter()
     m.leave("/z", "GET", 200, 0.001, 0, False)
+    #Окно в микросекунды — загрузки ещё нет, а не 100 %: на точных часах Linux один проход
+    #цикла и был бы «100 %», Windows прятала это шагом часов в 15 мс.
+    load = m.snapshot()["load"]
+    assert load["cpu_utilization"] is None and load["warn"] is False
+    m._started -= 120            # прошло две минуты, процессор почти не трудился
     assert m.snapshot()["load"]["cpu_utilization"] < 0.5
 
 

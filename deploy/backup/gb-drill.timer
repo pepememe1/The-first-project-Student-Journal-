@@ -1,0 +1,10 @@
+# Воскресенье 05:00 по Улан-Удэ — после еженедельного обновления ОС (и его перезагрузки).
+[Unit]
+Description=GradeBookAI weekly restore drill, Sunday 05:00 Asia/Irkutsk
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00:00 Asia/Irkutsk
+Persistent=true
+
+[Install]
+WantedBy=timers.target

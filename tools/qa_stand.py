@@ -21,6 +21,7 @@
     python -X utf8 tools/qa_stand.py                    # порт 8765, папка %TEMP%/gb-qa/stand
     python -X utf8 tools/qa_stand.py --port 8766 --dir <папка>
     python -X utf8 tools/qa_stand.py --artifact dist-release/<файл>.tar.gz
+    python -X utf8 tools/qa_stand.py --check            # проверки по ролям и выход (CI)
 Учётки печатаются при старте и лежат в <папка>/STAND.json.
 """
 
@@ -104,6 +105,8 @@ def _parse() -> argparse.Namespace:
     ap.add_argument("--big", action="store_true",
                     help="добавить большой колледж: ~20 групп, ~500 студентов, все роли, "
                          "прошлый семестр, переписка (см. seed_big)")
+    ap.add_argument("--check", action="store_true",
+                    help="прогнать проверки по ролям (tools/stand_checks.py) и выйти")
     ap.add_argument("--seed-only", action="store_true", help=argparse.SUPPRESS)
     return ap.parse_args()
 
@@ -672,6 +675,17 @@ def main() -> int:
     with open(os.path.join(args.dir, "STAND.json"), "w", encoding="utf-8") as fh:
         json.dump(info, fh, ensure_ascii=False, indent=1)
     print(f"СТЕНД ГОТОВ: {stand.base}  (лог: {stand.log_path})")
+    if args.check:
+        import stand_checks
+        try:
+            results = stand_checks.run(stand.base, ACCOUNTS)
+        finally:
+            stand.stop()
+        for name, ok, detail in results:
+            print(f"  {'ok ' if ok else 'НЕТ'} {name}" + (f" — {detail}" if not ok else ""))
+        failed = [r for r in results if not r[1]]
+        print(f"проверок {len(results)}, не прошло {len(failed)}")
+        return 1 if failed else 0
     for a in ACCOUNTS:
         print(f"  {a[2]:<10} {a[0]:<12} {a[1]:<24} {a[3]} {a[4]} {a[6]}")
     try:
