@@ -133,3 +133,18 @@ export function messagePreview(msg, opts = {}) {
   if (opts.withSender && msg.sender_name) return `${msg.sender_name}: ${text}`
   return text
 }
+
+/**
+ * Сообщение одной строкой БЕЗ подписи автора — для цитаты в пузыре, плашки закрепа,
+ * полосы «Ответ» над полем ввода и окна напоминания (проверка конфликтов 28.10.2026).
+ *
+ * У текста — само тело, ровно как раньше. У гифки, изображения, отчёта, активности и
+ * доски — та же подпись, что в списке чатов: в теле у них ссылка или id, и эти четыре
+ * места печатали его как есть («/media/avatar?k=m&…», «rpt:К75/1|3»).
+ * @param {object|null} msg  сообщение, как его отдаёт сервер
+ */
+export function messageSnippet(msg) {
+  if (!msg) return ''
+  if ((msg.kind || 'text') === 'text') return msg.body || ''
+  return messagePreview({ ...msg, mine: false })
+}

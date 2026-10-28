@@ -30,8 +30,9 @@ from sqlalchemy.orm import Session
 from ... import media_refs, storage
 from ...models import Attachment, Conversation, Message, User, user_fio
 from ._common import (Depends as _D, _conversation, _now, _participant,  # noqa: F401
-                      _masked_for, _personal_view, _require_participant, get_current_user,
-                      get_db, moderator_alias, moderator_display_name, router)
+                      _masked_for, _personal_view, _require_participant, _sender_aliases,
+                      get_current_user, get_db, moderator_alias, moderator_display_name,
+                      router)
 
 #Что считаем «медиа», а что «файлом». Гифки и видео-ссылки — медиа, документы — файлы.
 #⚠️ Разделение по СМЫСЛУ, а не по хранилищу: человек ищет «ту картинку» и «тот документ»
@@ -361,12 +362,15 @@ def chat_files(conv_id: str, user: User = Depends(get_current_user),
 @router.get("/chats/{conv_id}/media")
 def chat_media(conv_id: str, user: User = Depends(get_current_user),
                db: Session = Depends(get_db)):
-    """Вкладка «Медиа»: гифки и видео-ссылки.
+    """Вкладка «Медиа»: изображения, гифки и видео-ссылки.
 
     ⚠️ Видео у нас живёт ССЫЛКОЙ на видеохостинг, а не файлом (механизм А плана) —
     поэтому «медиа» собирается из тела сообщений, а не из вложений. Складывать это в
     одну вкладку с документами нельзя: человек ищет «ту картинку» и «тот документ» в
     разных местах.
+    ⚠️ Изображение (`kind == "image"`, 4.1.6) — подписанной ссылкой, как в ленте: без
+    этой ветки присланная картинка в «Медиа» не попадала вовсе (проверка конфликтов
+    28.10.2026), а сырое тело отдало бы data:URL каждой картинки беседы разом.
     """
     part = _require_participant(db, conv_id, user)
     q = db.query(Message).filter(Message.conversation_id == conv_id, Message.deleted_at == "")
@@ -378,11 +382,23 @@ def chat_media(conv_id: str, user: User = Depends(get_current_user),
             out.append({"message_id": m.id, "kind": "gif", "url": m.body,
                         "sent_at": m.created_at, "sender_id": m.sender_id})
             continue
+        if m.kind == "image":
+            out.append({"message_id": m.id, "kind": "image",
+                        "url": media_refs.ref_url("m", str(m.id), m.body or ""),
+                        "sent_at": m.created_at, "sender_id": m.sender_id})
+            continue
         body = m.body or ""
         if any(h in body for h in _VIDEO_HOSTS) and "http" in body:
             out.append({"message_id": m.id, "kind": "video", "url": body,
                         "sent_at": m.created_at, "sender_id": m.sender_id})
-    return {"media": out[:200]}
+    out = out[:200]
+    #🔒 Модератор — псевдонимом, как в ленте (`_msgs_out`, F-10). По сырому `sender_id`
+    #вкладка раскрывала, кто из модераторов прислал в беседу гифку, видео или картинку,
+    #хотя лента и «О беседе» показывают только номер (gb-review 28.10.2026).
+    aliases = _sender_aliases(db, [x["sender_id"] for x in out], user.id)
+    for x in out:
+        x["sender_id"] = aliases.get(x["sender_id"], x["sender_id"])
+    return {"media": out}
 
 
 @router.get("/chats/{conv_id}/saved")

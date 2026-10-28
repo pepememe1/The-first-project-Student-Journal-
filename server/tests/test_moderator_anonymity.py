@@ -189,6 +189,25 @@ def test_owner_removes_the_moderator_by_alias_and_the_feed_keeps_the_number(clie
     assert _leaks(feed) == [], "лента записала фамилию модератора навсегда"
 
 
+def test_media_tab_shows_the_moderator_by_number_only(client):
+    """Вкладка «Медиа» отдавала сырой `sender_id`: картинка или гифка модератора в группе
+    раскрывала его, хотя лента прячет его за номером (gb-review 28.10.2026). Обратный ход
+    (проверен): убрать подмену `_sender_aliases` в `chat_media` — краснеет."""
+    _admin, _teacher, bob, alias, gid = _group_with_moderator(client)
+    r = client.post("/auth/login", json={"login": SECRET_LOGIN, "password": "moderpass1"})
+    mod = {"Authorization": "Bearer " + r.json()["access_token"]}
+    png = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42"
+           "mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+    sent = client.post(f"/web/messenger/chats/{gid}/messages",
+                       json={"body": png, "kind": "image"}, headers=mod)
+    assert sent.status_code == 200, sent.text
+    media = client.get(f"/web/messenger/chats/{gid}/media", headers=bob)
+    assert media.status_code == 200, media.text
+    item = next(x for x in media.json()["media"] if x["message_id"] == sent.json()["id"])
+    assert item["sender_id"] == alias, "во вкладке «Медиа» — настоящий id модератора"
+    assert _leaks(media.json()) == [], "личность модератора ушла во вкладку «Медиа»"
+
+
 def test_tracker_shows_the_moderator_by_number_only(client):
     _admin, teacher, bob, alias, gid = _group_with_moderator(client)
     url = f"/web/messenger/chats/{gid}/tracker"

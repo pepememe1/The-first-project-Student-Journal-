@@ -342,6 +342,11 @@ async function deleteFromViewer() {
   if (await m.setActiveAvatar('')) avatarViewer.value = false
 }
 
+// Картинка или гифка из вкладки «Медиа» — в том же просмотрщике, что в ленте, только
+// для чтения (проверка конфликтов 28.10.2026). Ссылкой в новой вкладке она открывалась бы
+// с CDN Klipy (без VPN — не у всех), а адрес картинки вне сайта не открылся бы вовсе.
+const mediaViewer = ref('')
+
 async function leave() {
   const what = kind.value === 'channel' ? locale.t('messenger.channelWord', 'канала').toLowerCase() : locale.t('messenger.groupLabel', 'группы').toLowerCase()
   if (!(await confirm({ message: locale.t('conversationInfo.confirmLeave', { what }),
@@ -589,13 +594,20 @@ function onChatAction(action) {
               {{ locale.t('conversationInfo.noMedia', 'В этой беседе пока нет медиа') }}
             </p>
             <div v-else class="grid grid-cols-3 gap-1.5">
-              <a v-for="it in media" :key="it.message_id" :href="it.url" target="_blank" rel="noopener"
-                 class="block overflow-hidden rounded-lg border border-border bg-card2">
-                <img v-if="it.kind === 'gif'" :src="mediaSrc(it.url)" alt="" class="h-24 w-full object-cover" loading="lazy" />
-                <span v-else class="flex h-24 items-center justify-center px-2 text-center text-[10px] text-text3">
-                  {{ locale.t('conversationInfo.videoLink', 'видео') }}
-                </span>
-              </a>
+              <template v-for="it in media" :key="it.message_id">
+                <button v-if="it.kind === 'image' || it.kind === 'gif'" type="button"
+                        class="block overflow-hidden rounded-lg border border-border bg-card2 hover:border-accent"
+                        :aria-label="locale.t(it.kind === 'gif' ? 'messagePreview.gif' : 'messagePreview.image', it.kind === 'gif' ? 'GIF' : 'Изображение')"
+                        @click="mediaViewer = it.url">
+                  <img :src="mediaSrc(it.url)" alt="" class="h-24 w-full object-cover" loading="lazy" />
+                </button>
+                <a v-else :href="it.url" target="_blank" rel="noopener"
+                   class="block overflow-hidden rounded-lg border border-border bg-card2">
+                  <span class="flex h-24 items-center justify-center px-2 text-center text-[10px] text-text3">
+                    {{ locale.t('conversationInfo.videoLink', 'видео') }}
+                  </span>
+                </a>
+              </template>
             </div>
           </div>
 
@@ -761,6 +773,8 @@ function onChatAction(action) {
       <ImageViewerDialog v-if="avatarViewer && hasAvatar" :value="activeInfo.avatar" :title="title"
                          :file-name="title" :can-edit="canRename" :can-delete="canRename"
                          @edit="editFromViewer" @delete="deleteFromViewer" @close="avatarViewer = false" />
+      <ImageViewerDialog v-if="mediaViewer" :value="mediaViewer" :title="title"
+                         file-name="image" @close="mediaViewer = ''" />
     </div>
   </div>
 </template>

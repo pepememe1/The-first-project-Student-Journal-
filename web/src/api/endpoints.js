@@ -1040,6 +1040,9 @@ export const accountApi = {
   // Логин — в QUERY, а не в пути: так же, как имя группы, он может содержать символы,
   // которые путь портят (см. §«Имя группы не идёт в путь URL» в CLAUDE.md).
   extra: (login) => api.get('/web/accounts/extra', { params: { login } }),
+  // Только признак «учётка принадлежит студенту» — без стартового пароля и без следа
+  // «просмотр пароля» в журнале (редактор студента спрашивает его при каждом открытии).
+  owned: (login) => api.get('/web/accounts/owned', { params: { login } }),
   saveExtra: (login, adminEmail, adminPhone) =>
     api.post('/web/accounts/extra', { login, admin_email: adminEmail, admin_phone: adminPhone }),
   resetCredential: (login) => api.post('/web/accounts/credential/reset', { login }),

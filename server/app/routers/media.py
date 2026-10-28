@@ -42,11 +42,12 @@ def avatar(request: Request, k: str = "", i: str = "", v: str = "", s: str = "",
             return _gone()
         prefs = u.prefs if isinstance(u.prefs, dict) else {}
         value = prefs.get("avatar") or ""
-    elif k == "m":
-        #Сообщение-изображение. Удалённое у всех — 404: «удалил» обязано убирать и
-        #картинку, а не только строку в ленте.
+    elif k in ("m", "d"):
+        #Сообщение-изображение. «m» — для участников: удалённое у всех — 404, «удалил»
+        #обязано убирать и картинку, а не только строку в ленте. «d» — для модерации: её
+        #ссылку выдаёт только окно модератора, и удалённое она показывает (см. `KINDS`).
         msg = db.get(Message, int(i)) if i.isdigit() else None
-        if msg is None or msg.deleted_at or (msg.kind or "") != "image":
+        if msg is None or (msg.kind or "") != "image" or (k == "m" and msg.deleted_at):
             return _gone()
         value = msg.body or ""
     else:

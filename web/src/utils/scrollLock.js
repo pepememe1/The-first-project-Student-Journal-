@@ -118,6 +118,15 @@ export function fitOverlay(el, cs) {
     el.style.overflowY = 'auto'
     el.style.overflowX = 'hidden'
   }
-  if (cs.alignItems === 'center') el.style.alignItems = 'safe center'
-  if (cs.justifyContent === 'center') el.style.justifyContent = 'safe center'
+  //🔥 Раскладку, заданную ПО ШИРИНЕ (`items-end sm:items-center` — лист снизу на телефоне,
+  //окно посередине на ПК), инлайн-стилем не трогаем (живой прогон 28.10.2026). Инлайн
+  //замораживает ту ширину, на которой окно открылось: открыли редактор на ПК или в
+  //альбомной ориентации, повернули телефон — лист так и висел посередине, а не у низа.
+  //Такие окна держат высоту сами (`max-h` и своя прокрутка тела), `safe` им не нужен.
+  const cls = typeof el.className === 'string' ? el.className : ''
+  if (cs.alignItems === 'center' && !BY_WIDTH_ALIGN.test(cls)) el.style.alignItems = 'safe center'
+  if (cs.justifyContent === 'center' && !BY_WIDTH_JUSTIFY.test(cls)) el.style.justifyContent = 'safe center'
 }
+
+const BY_WIDTH_ALIGN = /(?:^|\s)(?:max-)?(?:sm|md|lg|xl|2xl):items-/
+const BY_WIDTH_JUSTIFY = /(?:^|\s)(?:max-)?(?:sm|md|lg|xl|2xl):justify-/

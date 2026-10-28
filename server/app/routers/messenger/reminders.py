@@ -60,9 +60,10 @@ def reminder_create(mid: int, payload: dict = Body(default={}),
     parsed = parsed.astimezone(timezone.utc)
 
     #Текст храним СНИМКОМ: автор может отредактировать или удалить сообщение, а напоминание
-    #должно остаться тем, на что человек рассчитывал.
+    #должно остаться тем, на что человек рассчитывал. Изображение — подписью: его тело —
+    #data:URL, и в уведомлении стоял бы base64 (`_body_snapshot`).
     row = Reminder(login=user.login or "", conversation_id=m.conversation_id,
-                   message_id=m.id, text=(m.body or "")[:1000],
+                   message_id=m.id, text=_body_snapshot(m)[:1000],
                    remind_at=parsed.isoformat(), created_at=_now(), fired_at="")
     db.add(row)
     db.commit()

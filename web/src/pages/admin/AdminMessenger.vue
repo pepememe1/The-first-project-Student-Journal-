@@ -694,7 +694,12 @@ function fmt(iso) {
                      см. mod_conversation_messages/editChainText. -->
                 <span v-if="mm.deleted" class="font-semibold text-red">({{ locale.t('adminMessenger.deletedTag', 'удал.') }})</span>
                 <span v-else-if="mm.edit_versions?.length" class="font-semibold text-orange">({{ locale.t('adminMessenger.editedTag', 'ред.') }})</span>
-                {{ editChainText(mm) }}
+                <!-- Изображение — картинкой: в теле подписанная ссылка («m», у удалённого
+                     «d»), и текстом модератор видел бы адрес вместо того, на что жалуются. -->
+                <img v-if="mm.kind === 'image' && mm.body" :src="mediaSrc(mm.body)"
+                     :alt="locale.t('messagePreview.image', 'Изображение')" loading="lazy"
+                     class="mt-1 block max-h-48 max-w-full rounded-md border border-border object-contain" />
+                <template v-else>{{ editChainText(mm) }}</template>
               </span>
               <!-- Удалить нарушающее сообщение у всех (модерация). -->
               <button v-if="!mm.deleted" type="button" @click="deleteMessage(mm)"
@@ -719,8 +724,14 @@ function fmt(iso) {
                    :class="isModReply(mm) ? 'bg-accent text-white' : 'bg-card2 text-text'">
                 <span v-if="mm.deleted" class="italic opacity-70">
                   <span class="not-italic font-semibold">({{ locale.t('adminMessenger.deletedTag', 'удал.') }})</span>
-                  {{ mm.body }}
+                  <img v-if="mm.kind === 'image' && mm.body" :src="mediaSrc(mm.body)"
+                       :alt="locale.t('messagePreview.image', 'Изображение')" loading="lazy"
+                       class="mt-1 block max-h-48 max-w-full rounded-md object-contain" />
+                  <template v-else>{{ mm.body }}</template>
                 </span>
+                <img v-else-if="mm.kind === 'image' && mm.body" :src="mediaSrc(mm.body)"
+                     :alt="locale.t('messagePreview.image', 'Изображение')" loading="lazy"
+                     class="block max-h-48 max-w-full rounded-md object-contain" />
                 <span v-else class="whitespace-pre-wrap break-words">
                   <span v-if="mm.edit_versions?.length" class="font-semibold" :class="isModReply(mm) ? 'text-white' : 'text-orange'">({{ locale.t('adminMessenger.editedTag', 'ред.') }})</span>
                   {{ editChainText(mm) }}

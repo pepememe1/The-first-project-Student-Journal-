@@ -1014,6 +1014,21 @@ def _msgs_out(db, rows, me_id: str, names: dict) -> list:
             for m in rows]
 
 
+#Подпись вместо тела там, где тело читают глазами одной строкой и хранят СНИМКОМ: жалоба,
+#напоминание, превью очереди модерации. Тело изображения — data:URL на сотни КБ, и
+#снимком оно становилось стеной base64 в карточке модератора и в уведомлении
+#(проверка конфликтов 28.10.2026). Сама картинка остаётся в строке сообщения: удаление
+#тело не стирает, модерация видит его по ссылке вида «d» (`mod_conversation_messages`).
+IMAGE_LABEL = media_refs.IMAGE_LABEL
+
+
+def _body_snapshot(m) -> str:
+    """Текст сообщения для снимка и превью: изображение — подписью, остальное — как есть."""
+    if (getattr(m, "kind", "") or "") == "image":
+        return IMAGE_LABEL
+    return m.body or ""
+
+
 def _msg_out(m: Message, me_id: str = "", sender_name: str = "", att: dict = None,
              sender_alias: str = "") -> dict:
     """Сериализация сообщения для клиента. Удалённое-у-всех отдаём тумбстоуном (без текста).
@@ -1407,8 +1422,10 @@ def _visible_messages_query(db: Session, conv_id: str, part, user_id: str):
 # текст личной переписки никуда не уезжает.
 
 def _reminder_out(r) -> dict:
+    #Напоминание на картинку, поставленное до правки, держит data:URL в тексте — подписью.
     return {"id": r.id, "conversation_id": r.conversation_id, "message_id": r.message_id,
-            "text": r.text, "remind_at": r.remind_at, "fired_at": r.fired_at or ""}
+            "text": media_refs.text_or_label(r.text), "remind_at": r.remind_at,
+            "fired_at": r.fired_at or ""}
 
 
 _VECTOR_CMD_RE = re.compile(r"^/vector(?:@\w+)?\s*(.*)$", re.IGNORECASE | re.DOTALL)
@@ -2028,7 +2045,10 @@ def _report_out(db: Session, r: MessageReport) -> dict:
         #сообщение», и удалён был бы ПОСТОРОННИЙ текст с совпавшим номером — молча и
         #необратимо для читателей. Держит `test_feedback_report_is_marked_as_not_a_message`.
         "target_kind": getattr(r, "target_kind", "") or "message",
-        "message_snapshot": r.message_snapshot, "reason_code": r.reason_code,
+        #Снимок картинки наружу не уходит: жалоба на изображение хранит подпись
+        #(`_body_snapshot`), а data:URL в старой строке подменяется той же подписью.
+        "message_snapshot": media_refs.text_or_label(r.message_snapshot),
+        "reason_code": r.reason_code,
         "description": r.description, "created_at": r.created_at, "status": r.status,
         "reporter_name": (reporter.full_name if reporter else r.reporter_id),
         "reported_name": (reported.full_name if reported else r.reported_user_id),

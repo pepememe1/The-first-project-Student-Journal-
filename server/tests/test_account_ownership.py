@@ -167,6 +167,32 @@ def test_onboarding_locks_the_account_from_the_admin(client, mail, data_key):
                        headers=WEB).status_code == 401
 
 
+def test_owned_flag_for_the_editor_carries_no_password_and_leaves_no_trace(client, mail, data_key):
+    """Редактор студента спрашивает признак при КАЖДОМ открытии, чтобы погасить поле
+    пароля заранее (28.10.2026). Это не просмотр пароля: ни стартового пароля в ответе,
+    ни записи «просмотр стартового пароля» в журнале — иначе журнал наполнился бы ложными
+    просмотрами. Обратный ход: отдать здесь ответ `/web/accounts/extra` — краснеет."""
+    admin = make_admin(client)
+    pw = _issued(client, admin)
+    r = client.get("/web/accounts/owned", params={"login": "s1"}, headers=admin)
+    assert r.status_code == 200 and r.json() == {"owned": False}
+    assert pw not in r.text
+    me = _login(client, "s1", pw)
+    _onboard(client, me, mail)
+    r = client.get("/web/accounts/owned", params={"login": "s1"}, headers=admin)
+    assert r.json() == {"owned": True}
+    from app.db import SessionLocal
+    from app.models import AuditEvent
+    db = SessionLocal()
+    try:
+        assert db.query(AuditEvent).filter(AuditEvent.action == "credentials.view").count() == 0
+    finally:
+        db.close()
+    #Сам студент чужие признаки не спрашивает (ручка — для редактора администратора).
+    assert client.get("/web/accounts/owned", params={"login": "s1"},
+                      headers=me).status_code == 403
+
+
 def test_owned_student_is_never_in_the_rollout_sheet(client, mail, data_key):
     admin = make_admin(client)
     me = _login(client, "s1", _issued(client, admin))

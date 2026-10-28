@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from . import config
+from . import config, media_refs
 
 log = logging.getLogger("gradebook.push")
 
@@ -721,8 +721,10 @@ def notify_reminder(db, login: str, text: str, conversation_id: str = "") -> int
 
     Текст он написал (или выбрал) сам, так что в НАШЕМ письме он есть целиком. В пуш, как
     и везде, уходит только «есть напоминание» + id события: тело идёт через RuStore, а в
-    сообщении переписки может оказаться что угодно."""
-    snippet = (text or "").strip()
+    сообщении переписки может оказаться что угодно.
+    Напоминание на картинку, поставленное кодом 4.1.6 до правки, держит data:URL в тексте —
+    в письмо уходит подпись, а не обрывок base64 (`media_refs.text_or_label`)."""
+    snippet = media_refs.text_or_label(text).strip()
     body = snippet if len(snippet) <= 300 else snippet[:297] + "…"
     event_id = _create_event(db, login, "reminder", "Напоминание",
                              body or "Вы просили напомнить.",

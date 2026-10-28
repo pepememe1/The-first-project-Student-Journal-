@@ -37,6 +37,13 @@ test('«Забыли пароль?» — после двух неудачных 
   assert.match(fn.slice(0, 120), /if \(!showForgot\.value\) return/, 'дверь отказывает первой строкой')
 })
 
+test('до кнопки подсказка не зовёт восстанавливать пароль, а говорит, когда кнопка появится', () => {
+  //Живой прогон 28.10.2026: после первой неудачи подсказка уже предлагала «восстановите
+  //кодом из письма», а кнопки ещё не было — человек искал, чем. Обратный ход: вернуть
+  //одну подсказку на оба состояния — краснеет.
+  assert.match(LOGIN, /\{\{ showForgot\s+\? loc\.t\('login\.forgotHint',[\s\S]{0,300}: loc\.t\('login\.forgotHintSoon'/)
+})
+
 test('обратный ход: кнопка, висящая всегда, и счётчик без вызова находятся', () => {
   assert.equal(forgotThreshold(LOGIN.replace('const FORGOT_AFTER = 2', 'const FORGOT_AFTER = 0')), 0)
   assert.equal(forgotThreshold(LOGIN.replace('failedLogins.value += 1', 'void 0')), null,
@@ -75,4 +82,26 @@ test('учётка студента: галочка в листе погашен
   const ownedAt = EXTRA.indexOf('v-else-if="owned"')
   const resetAt = EXTRA.indexOf('@click="reset"', EXTRA.indexOf('v-else-if="cred"'))
   assert.ok(ownedAt > 0 && resetAt > ownedAt, 'ветка «учётка студента» обязана стоять ДО ветки со сбросом')
+})
+
+// ── Редактор студента (проверка конфликтов 28.10.2026) ─────────────────────────────────
+// Поле «Новый пароль» оставалось живым у учётки студента: администратор набирал пароль,
+// правил ФИО и группу и получал отказ сервера на всё сохранение разом. Признак берётся
+// ЛЁГКОЙ ручкой `/web/accounts/owned`, а не `/web/accounts/extra` — та отдаёт стартовый
+// пароль и пишет «просмотр пароля» в журнал при каждом открытии редактора.
+// Обратный ход (проверен): убрать `:disabled="pwOwned"` с поля — краснеет.
+test('учётка студента: поле нового пароля в редакторе погашено, признак — лёгкой ручкой', () => {
+  const STUDENTS = readSource('pages/admin/AdminStudents.vue')
+  assert.match(API, /owned: \(login\) => api\.get\('\/web\/accounts\/owned'/)
+  const open = STUDENTS.slice(STUDENTS.indexOf('function openEdit('))
+  assert.match(open.slice(0, 900), /checkOwned\(/, 'открытие редактора не спрашивает признак')
+  assert.match(STUDENTS, /accountApi\.owned\(login\)/)
+  assert.doesNotMatch(STUDENTS, /accountApi\.extra\(/, 'редактор не должен звать ручку со стартовым паролем')
+  assert.match(STUDENTS, /v-model="form\.password"[^>]*:disabled="pwOwned"/, 'поле пароля не гаснет')
+  assert.match(STUDENTS, /@click="regeneratePassword"/)
+  assert.match(STUDENTS, /:disabled="pwOwned"[\s\S]{0,400}@click="regeneratePassword"/, '⟳ не гаснет')
+  //Пароль, набранный или сгенерированный ДО ответа о владении, из формы убирается: иначе
+  //погашенное поле унесло бы его в сохранение (нашёл Полковник 28.10.2026).
+  const check = STUDENTS.slice(STUDENTS.indexOf('function checkOwned('), STUDENTS.indexOf('function openCreate('))
+  assert.match(check, /if \(pwOwned\.value\) form\.value\.password = ''/, 'набранный пароль остаётся в форме')
 })

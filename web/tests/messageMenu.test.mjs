@@ -115,6 +115,28 @@ test('править нельзя чужое, GIF, пересланное, уд�
   assert.ok(!messageMenuItems({ ...own, kind: 'gif' }).primary.includes('edit'))
 })
 
+// ── Нетекстовые виды (проверка конфликтов 28.10.2026) ──────────────────────────────────
+// С 4.1.6 есть сообщение-изображение: в его теле служебная ссылка на картинку. Меню
+// предлагало «Зачитать» (TTS произносил адрес), «Перевести» и «Копировать» (в буфер —
+// «/media/avatar?k=m…»). У отчёта, активности и доски в теле id — та же болезнь, старше.
+// Обратный ход (проверен): вернуть `if (msg.body) more.push('speak')` — краснеет.
+test('картинку, гифку и карточки не зачитывают и не переводят; служебную ссылку не копируют', () => {
+  for (const kind of ['image', 'gif', 'report', 'activity', 'poll', 'board']) {
+    const menu = messageMenuItems({ ...foreign, kind, body: kind === 'image' ? '/media/avatar?k=m&i=1' : 'id:1' })
+    assert.ok(!menu.more.includes('speak'), `${kind}: «Зачитать» произнесло бы адрес или id`)
+    assert.ok(!menu.more.includes('translate'), `${kind}: переводить нечего`)
+    assert.ok(menu.more.includes('remind'), `${kind}: «Напомнить» пропало`)
+    assert.ok(menu.primary.includes('reply') && menu.primary.includes('forward'), kind)
+  }
+  assert.ok(!messageMenuItems({ ...foreign, kind: 'image', body: '/media/avatar?k=m' }).primary.includes('copy'))
+  assert.ok(messageMenuItems({ ...foreign, kind: 'gif', body: 'https://static.klipy.com/x.gif' }).primary.includes('copy'),
+    'ссылку на гифку копировать можно — её отправляют в другие места')
+  //Текст и подпись к файлу — по-прежнему всё.
+  assert.ok(messageMenuItems(foreign).primary.includes('copy'))
+  assert.ok(messageMenuItems(foreign).more.includes('speak'))
+  assert.ok(messageMenuItems({ ...foreign, kind: 'file', body: 'подпись' }).more.includes('translate'))
+})
+
 test('лента выполняет «Изменить»: пункт ведёт в правку, отправка зовёт editMessage', () => {
   const src = readFileSync(new URL('../src/components/messenger/ChatThread.vue', import.meta.url), 'utf8')
   assert.match(src, /action === 'edit'\) startEdit\(msg\)/, 'пункт меню без обработчика')

@@ -35,7 +35,13 @@ export function messageMenuItems(m) {
   if (msg.deleted) return { primary: ['select'], more: [] }
 
   const edit = canEditMessage(msg)
-  const primary = edit ? ['reply', 'edit', 'copy', 'forward'] : ['reply', 'copy', 'forward']
+  const text = hasHumanText(msg)
+  const primary = ['reply']
+  if (edit) primary.push('edit')
+  //Копировать есть что у текста и у гифки (ссылку на неё отправляют в другие места);
+  //у изображения в теле служебная ссылка на картинку, у отчёта и активности — id.
+  if (text || msg.kind === 'gif') primary.push('copy')
+  primary.push('forward')
   primary.push(msg.pinned ? 'unpin' : 'pin')
   primary.push('delete')
   // «Пожаловаться» — только на ЧУЖОЕ: жалоба на себя не имеет адресата, а место в
@@ -45,12 +51,22 @@ export function messageMenuItems(m) {
   else if (!edit) primary.push('select')
 
   const more = []
-  if (msg.body) more.push('speak')
-  if (!msg.mine && msg.body) more.push('translate')
+  if (text) more.push('speak')
+  if (!msg.mine && text) more.push('translate')
   more.push('remind')
   if (msg.mine) more.push('reactions-info')
   if (!msg.mine || edit) more.push('select')
   return { primary, more }
+}
+
+/**
+ * Есть ли в сообщении текст, набранный человеком: обычное сообщение или подпись к файлу
+ * (проверка конфликтов 28.10.2026). У гифки в теле ссылка, у изображения — служебная
+ * ссылка на картинку, у отчёта, активности и доски — id: «Зачитать» произносило адрес
+ * вслух, «Перевести» переводило его, «Копировать» клало в буфер «/media/avatar?k=m…».
+ */
+function hasHumanText(msg) {
+  return ['text', 'file'].includes(msg.kind || 'text') && !!(msg.body || '').trim()
 }
 
 /**

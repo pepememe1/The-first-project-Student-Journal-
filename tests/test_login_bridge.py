@@ -335,3 +335,66 @@ def test_second_step_completes_the_desktop_login(api, monkeypatch):
 def test_second_step_without_a_live_challenge_is_refused(api):
     code, body = _post(api, "/auth/mfa/verify", {"challenge": "нет-такого", "code": "1"})
     assert code == 401 and "истекло" in body.get("detail", "")
+
+
+# ── «Забыли пароль?» внутри программы (27–28.10.2026) ────────────────────────────────
+#Почта, коды восстановления и пароль живут только на бою (`UserContact` не в
+#SYNC_MODELS, письма шлёт бой), поэтому мост `install_recovery_bridge` обязан переслать
+#туда эти три запроса — без токена: входа ещё нет. Без моста ответила бы ЛОКАЛЬНАЯ копия
+#серверного приложения: «код отправлен», не отправив ничего, а пароль сменился бы на
+#одной этой машине. Мост вызывается при каждом старте, но проверки, что запрос и правда
+#уходит на бой, не было — ровно «вызов есть, а поведения нет» (проверка конфликтов
+#28.10.2026). Обратный ход (проверен): убрать `install_recovery_bridge(app)` из `start()`
+#— краснеют все три теста: запрос доходит до локальной ручки, пересылки нет.
+
+def _post_with_headers(api, path, payload):
+    req = urllib.request.Request(api.url(path), data=json.dumps(payload).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read() or b"{}"), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"{}"), dict(e.headers)
+
+
+def _record_forward(monkeypatch, answer):
+    calls = []
+
+    def fake(path, payload):
+        calls.append((path, payload))
+        return answer
+
+    monkeypatch.setattr(local_api, "_forward_to_server_with_reason", fake)
+    return calls
+
+
+def test_recovery_code_request_goes_to_prod_with_only_its_fields(api, monkeypatch):
+    calls = _record_forward(monkeypatch, (200, {"ok": True}, ""))
+    #Лишнее поле в теле не уезжает: мост без токена пересылает поимённо.
+    code, body, _h = _post_with_headers(api, "/auth/recover/code/start",
+                                        {"login": "loc", "email": "loc@mail.ru", "role": "admin"})
+    assert code == 200 and body == {"ok": True}, body
+    assert calls == [("/auth/recover/code/start", {"login": "loc", "email": "loc@mail.ru"})]
+
+
+def test_recovery_code_and_new_password_go_to_prod(api, monkeypatch):
+    calls = _record_forward(monkeypatch, (200, {"ok": True, "token": "T-1"}, ""))
+    code, body, _h = _post_with_headers(api, "/auth/recover/code/verify",
+                                        {"login": "loc", "code": "123456"})
+    assert code == 200 and body.get("token") == "T-1", body
+    code, _body, _h = _post_with_headers(api, "/auth/recover/confirm",
+                                         {"token": "T-1", "password": "Новый-пароль-1", "code": ""})
+    assert code == 200
+    assert calls == [("/auth/recover/code/verify", {"login": "loc", "code": "123456"}),
+                     ("/auth/recover/confirm",
+                      {"token": "T-1", "password": "Новый-пароль-1", "code": ""})]
+
+
+def test_recovery_bridge_passes_the_second_factor_signal_through(api, monkeypatch):
+    #Бой просит код второго фактора — без заголовка страница не узнала бы, что надо
+    #показать поле кода, и человек упирался бы в «неверно» без объяснения.
+    _record_forward(monkeypatch, (403, {"detail": "Нужен код второго фактора"}, "mfa_required"))
+    code, body, headers = _post_with_headers(api, "/auth/recover/confirm",
+                                             {"token": "T-1", "password": "x" * 10})
+    assert code == 403 and "второго фактора" in body.get("detail", "")
+    assert {k.lower(): v for k, v in headers.items()}.get("x-gb-reason") == "mfa_required"

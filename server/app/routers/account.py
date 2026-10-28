@@ -387,6 +387,22 @@ def account_extra(login: str = Query(...), request: Request = None,
     return out
 
 
+@router.get("/web/accounts/owned")
+def account_owned(login: str = Query(...),
+                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Принадлежит ли учётка студенту — только признак (28.10.2026).
+
+    Редактор студента гасит поле «Новый пароль» ДО того, как администратор его заполнит:
+    иначе он набирал пароль, правил ФИО и группу и получал отказ на всё сохранение разом.
+    ⚠️ Не `/web/accounts/extra`: та отдаёт стартовый пароль и пишет в журнал «просмотр
+    стартового пароля» — открытие редактора не должно ни получать пароль, ни оставлять
+    такой след."""
+    target = _scope_student(db, user, login)
+    owned = password_recovery.owned_by_student(db, target)
+    db.commit()                               #state мог стереть устаревший шифротекст
+    return {"owned": owned}
+
+
 @router.post("/web/accounts/extra")
 def save_account_extra(body: dict = Body(...), request: Request = None,
                        user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -398,7 +414,8 @@ def save_account_extra(body: dict = Body(...), request: Request = None,
     #на совпадающую почту, и правка записи колледжа «отпирала» бы учётку в два клика —
     #подменил почту, сбросил пароль. Телефон править можно: на нём вход не держится.
     new_email = str(body.get("admin_email") or "").strip().lower()
-    if password_recovery.owned_by_student(db, target) and             new_email != login_guard.admin_email_of(db, target):
+    if (password_recovery.owned_by_student(db, target)
+            and new_email != login_guard.admin_email_of(db, target)):
         audit.log(db, request, actor=user.login, role=user.role,
                   action="contact.admin_set.reject", target=target.login, level="warn",
                   detail="почта колледжа не изменена: учётка принадлежит студенту")

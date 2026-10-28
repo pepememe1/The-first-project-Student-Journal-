@@ -611,7 +611,7 @@ def _inbox_state(db: Session, conv) -> dict:
             q = q.filter(Message.id > last_reply.id)
         fresh = q.count()
     #Изображение — подписью, а не обрывком base64 (`kind == "image"`, 28.10.2026).
-    preview = "[изображение]" if (last.kind or "") == "image" else (last.body or "")[:200]
+    preview = _body_snapshot(last)[:200]
     return {"last_at": last.created_at or "", "last_body": preview,
             "last_from": last.sender_id or "", "fresh": fresh}
 
@@ -683,7 +683,13 @@ def mod_conversation_messages(conv_id: str, report_id: int = Query(0),
     for m in rows:
         d = _msg_out(m, sender_name=names.get(m.sender_id, ""))
         if m.deleted_at:
-            d["body"] = m.body or ""
+            #Удалённое изображение — ссылкой вида «d»: «m» у удалённого отвечает 404 (так и
+            #надо для участников), а data:URL каждой удалённой картинки раздул бы окно
+            #модератора до десятков мегабайт (проверка конфликтов 28.10.2026).
+            if (m.kind or "") == "image" and m.body:
+                d["body"] = media_refs.ref_url("d", str(m.id), m.body)
+            else:
+                d["body"] = m.body or ""
         versions = edits_by_msg.get(m.id)
         if versions:
             d["edit_versions"] = versions + [{"body": m.body or "", "at": m.edited_at or m.created_at}]

@@ -23,7 +23,7 @@ import { highlightMentions } from '@/utils/mentions'
 import { extractVideos, embedMode } from '@/utils/videoEmbed'
 import { isNativeApp } from '@/api/server'
 import { extractGifLinks } from '@/utils/gifEmbed'
-import { formatSystemMessage } from '@/utils/messagePreview'
+import { formatSystemMessage, messageSnippet } from '@/utils/messagePreview'
 import { addDays, collegeDayKey, collegeParts, formatCollege } from '@/utils/collegeTime'
 import { copyText } from '@/utils/clipboard'
 import { highlightIn } from '@/utils/highlightFragment'
@@ -380,7 +380,8 @@ function fmtTime(iso) {
 }
 function quoted(id) {
   const src = messages.value.find(x => x.id === id)
-  return src ? (src.deleted ? locale.t('chatThread.deleted', 'Сообщение удалено') : src.body) : ''
+  //Не тело как есть: у картинки, гифки и отчёта в теле ссылка или id (`messageSnippet`).
+  return src ? (src.deleted ? locale.t('chatThread.deleted', 'Сообщение удалено') : messageSnippet(src)) : ''
 }
 
 // ── Цитата в пузыре (как в Telegram): имя автора + процитированный кусок ───────────────
@@ -2021,7 +2022,7 @@ function openActivities() {
         <Pin class="size-4 shrink-0 text-accent" />
         <div class="min-w-0">
           <div class="text-[11px] font-semibold text-accent">{{ locale.t('chatThread.pinnedLabel', 'Закреплённое') }}{{ pinned.length > 1 ? ` · ${pinned.length}` : '' }}</div>
-          <div class="truncate text-xs text-text2">{{ topPinned.body }}</div>
+          <div class="truncate text-xs text-text2">{{ messageSnippet(topPinned) }}</div>
         </div>
       </button>
 
@@ -2524,7 +2525,7 @@ function openActivities() {
               </div>
               <!-- Что именно процитируется — видно ДО отправки. Выделение к этому моменту
                    уже снято, и без показа человек отправлял бы ответ вслепую. -->
-              <div class="truncate text-xs text-text3">{{ replyTo.deleted ? locale.t('chatThread.deleted', 'Сообщение удалено') : (replyQuote || replyTo.body) }}</div>
+              <div class="truncate text-xs text-text3">{{ replyTo.deleted ? locale.t('chatThread.deleted', 'Сообщение удалено') : (replyQuote || messageSnippet(replyTo)) }}</div>
             </div>
             <button type="button" @click="m.clearReply()" :aria-label="locale.t('chatThread.cancelReply', 'Отменить ответ')"
                     class="grid size-6 place-items-center rounded-md text-text3 hover:bg-bg2"><X class="size-4" /></button>

@@ -112,6 +112,20 @@ test('окно выше экрана прокручивается само, и �
   assert.match(readSource('directives/dialog.js'), /if \(lockFor\(el\)\) fitOverlay\(el, getComputedStyle\(el\)\)/)
 })
 
+test('раскладку по ширине (лист снизу на телефоне) инлайн-стиль не замораживает', () => {
+  //Живой прогон 28.10.2026: редактор открыли на ПК (`sm:items-center` → `center`),
+  //сузили окно до телефона — лист остался посередине, потому что `fitOverlay` записал
+  //`safe center` в инлайн-стиль поверх класса `items-end`. Обратный ход: убрать проверку
+  //`BY_WIDTH_ALIGN` — краснеет первая проверка.
+  const sheet = { className: 'fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4', style: {} }
+  fitOverlay(sheet, { overflowY: 'visible', alignItems: 'center', justifyContent: 'center' })
+  assert.equal(sheet.style.alignItems, undefined, 'раскладка по ширине заморожена инлайн-стилем')
+  assert.equal(sheet.style.justifyContent, 'safe center', 'горизонталь от ширины не зависит — её чиним')
+  assert.equal(sheet.style.overflowY, 'auto')
+  //Каркас редакторов именно такой — сторож смотрит на настоящий класс, а не на копию.
+  assert.match(readSource('components/ui/EditorShell.vue'), /items-end justify-center[^"]*sm:items-center/)
+})
+
 test('оверлей, спрятанный через v-show после показа, страницу отпускает', () => {
   //Окно активности открыли во весь экран (заперло), потом свернули — `v-show` прячет его,
   //не размонтируя. Без пересчёта в `updated` журнал не прокручивался бы, пока идёт

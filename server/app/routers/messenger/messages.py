@@ -559,13 +559,27 @@ def edit_message(mid: int, payload: dict = Body(...),
 def message_history(mid: int, user: User = Depends(get_current_user),
                     db: Session = Depends(get_db)):
     """§D11: история редактирования сообщения (участникам беседы). Показывает версии ДО
-    правок + текущий текст — чтобы было видно, что менялось."""
+    правок + текущий текст — чтобы было видно, что менялось.
+
+    🔒 Удалённое у всех и скрытое лично («удалить у себя», очистка истории) — 404
+    (проверка конфликтов 28.10.2026). Ручка брала сообщение мимо границ ленты, и любой
+    участник по номеру читал текст, удалённый у всех, вместе со всеми прежними правками, —
+    а с 4.1.6 ещё и data:URL удалённой картинки. Удалённое видит только модерация
+    (`mod_conversation_messages`, со следом в журнале). Границы — та же `_personal_view`,
+    что у ленты (§4.40)."""
     m = _message_in_conv(db, mid)
-    _require_participant(db, m.conversation_id, user)
+    part = _require_participant(db, m.conversation_id, user)
+    visible = _personal_view(db, db.query(Message).filter(Message.id == mid),
+                             m.conversation_id, part, user.id).first()
+    if m.deleted_at or visible is None:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
     edits = (db.query(MessageEdit).filter(MessageEdit.message_id == mid)
              .order_by(MessageEdit.id.asc()).all())
     versions = [{"body": e.body_before, "at": e.edited_at} for e in edits]
-    versions.append({"body": m.body or "", "at": m.edited_at or m.created_at, "current": True})
+    #Изображение не правится, и текущая версия у него одна — ссылкой, как в ленте.
+    current = (media_refs.ref_url("m", str(m.id), m.body or "")
+               if (m.kind or "") == "image" else (m.body or ""))
+    versions.append({"body": current, "at": m.edited_at or m.created_at, "current": True})
     return {"versions": versions}
 
 
@@ -881,7 +895,7 @@ def report_message(payload: dict = Body(...),
     desc = (payload.get("description") or "").strip()[:2000]
     rep = MessageReport(
         message_id=mid, conversation_id=m.conversation_id,
-        message_snapshot=m.body or "", reporter_id=user.id, reported_user_id=m.sender_id,
+        message_snapshot=_body_snapshot(m), reporter_id=user.id, reported_user_id=m.sender_id,
         reason_code=reason, description=desc, created_at=_now(), status="open",
     )
     db.add(rep)

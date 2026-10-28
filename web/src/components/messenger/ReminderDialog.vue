@@ -13,6 +13,7 @@ import { messengerApi } from '@/api/endpoints'
 import { useToast } from '@/composables/useToast'
 import { useLocaleStore } from '@/stores/locale'
 import { addDays, collegeParts, formatCollege, fromCollegeInput, fromCollegeWall, toCollegeInput } from '@/utils/collegeTime'
+import { messageSnippet } from '@/utils/messagePreview'
 
 const props = defineProps({ message: { type: Object, required: true } })
 const emit = defineEmits(['close'])
@@ -81,8 +82,9 @@ async function save() {
         </button>
       </div>
 
+      <!-- Подпись, а не тело: у картинки и гифки в теле ссылка (`messageSnippet`). -->
       <p class="mb-3 line-clamp-3 rounded-md border-l-2 border-accent bg-bg2 px-3 py-2 text-xs text-text2">
-        {{ message.body }}
+        {{ messageSnippet(message) }}
       </p>
 
       <p v-if="loading" class="py-3 text-center text-sm text-text3">{{ locale.t('reminder.searching', 'Ищем дату в тексте…') }}</p>

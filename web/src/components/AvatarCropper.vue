@@ -5,6 +5,9 @@
 // JPEG (data:URL) в prefs. Всё в браузере, без сети и сторонних библиотек.
 import { ref, onBeforeUnmount } from 'vue'
 import EditorShell from '@/components/ui/EditorShell.vue'
+import { useLocaleStore } from '@/stores/locale'
+
+const loc = useLocaleStore()
 
 defineProps({ current: { type: String, default: '' } })
 const emit = defineEmits(['save', 'close'])
@@ -98,7 +101,8 @@ function remove() { emit('save', '') }        // удалить аватарку
 
 <template>
   <!-- Каркас — общий для редакторов (`EditorShell.vue`, 27.10.2026). -->
-  <EditorShell title="Аватарка" subtitle="Перетащите и приблизьте, чтобы поместить в круг"
+  <EditorShell :title="loc.t('avatarCropper.title', 'Аватарка')"
+               :subtitle="loc.t('avatarCropper.hint', 'Перетащите и приблизьте, чтобы поместить в круг')"
                icon="edit" size="sm" @close="emit('close')">
 
       <!-- Вьюпорт с круглой рамкой -->
@@ -109,7 +113,7 @@ function remove() { emit('save', '') }        // удалить аватарку
                   @mousedown="onDown" @touchstart.prevent="onDown" @touchmove.prevent="onMove"
                   @touchend="onUp" @wheel="onWheel" />
           <p v-if="!img" class="pointer-events-none absolute inset-0 grid place-items-center px-4 text-center text-xs text-text3">
-            Выберите изображение — перетаскивайте и масштабируйте, чтобы поместить в рамку.
+            {{ loc.t('avatarCropper.empty', 'Выберите изображение — перетаскивайте и масштабируйте, чтобы поместить в рамку.') }}
           </p>
         </div>
       </div>
@@ -123,18 +127,18 @@ function remove() { emit('save', '') }        // удалить аватарку
       </div>
 
       <label class="mb-3 flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">
-        {{ img ? 'Выбрать другое изображение' : 'Выбрать изображение' }}
+        {{ img ? loc.t('avatarCropper.pickOther', 'Выбрать другое изображение') : loc.t('avatarCropper.pick', 'Выбрать изображение') }}
         <input type="file" accept="image/*" class="hidden" @change="onFile" />
       </label>
 
       <template #footer>
         <button v-if="current" type="button" @click="remove"
-                class="mr-auto rounded-lg border border-border2 px-4 py-2 text-sm text-red hover:bg-bg2">Удалить</button>
+                class="mr-auto rounded-lg border border-border2 px-4 py-2 text-sm text-red hover:bg-bg2">{{ loc.t('common.delete', 'Удалить') }}</button>
         <button type="button" @click="emit('close')"
-                class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">Отмена</button>
+                class="rounded-lg border border-border2 px-4 py-2 text-sm text-text2 hover:bg-bg2">{{ loc.t('common.cancel', 'Отмена') }}</button>
         <button type="button" @click="save" :disabled="!img"
                 class="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent2 disabled:opacity-50">
-          Сохранить
+          {{ loc.t('common.save', 'Сохранить') }}
         </button>
       </template>
   </EditorShell>

@@ -6,7 +6,7 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import StickyXScroll from '@/components/ui/StickyXScroll.vue'
 import { RotateCw, Copy } from '@lucide/vue'
-import { adminApi, scheduleApi } from '@/api/endpoints'
+import { accountApi, adminApi, scheduleApi } from '@/api/endpoints'
 import { generatePassword } from '@/utils/passwordGen'
 import { copyText } from '@/utils/clipboard'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -273,11 +273,32 @@ function formGroupLabel(g) {
 //Что было в форме при открытии: по этому видно, есть ли что терять при закрытии и
 //менял ли человек группу.
 let formAtOpen = ''
+
+// Учётка принадлежит студенту (почта привязана, пароль придуман им самим) — поле нового
+// пароля гаснет сразу при открытии (проверка конфликтов 28.10.2026). Раньше админ узнавал
+// об этом только по отказу сервера на «Сохранить», и вместе с паролем не сохранялись ФИО
+// и группа. Сервер откажет и сам (`password_recovery.owned_refusal`); здесь — подсказка.
+const pwOwned = ref(false)
+function checkOwned(login) {
+  pwOwned.value = false
+  if (!login) return
+  accountApi.owned(login)
+    .then(({ data }) => {
+      if (editing.value !== login) return
+      pwOwned.value = !!data?.owned
+      //Ответ пришёл, когда пароль уже набран или сгенерирован ⟳: погашенное поле не должно
+      //унести его в сохранение — иначе отказ на всё разом (нашёл Полковник 28.10.2026).
+      if (pwOwned.value) form.value.password = ''
+    })
+    .catch(() => { /* признак не пришёл — решит сервер при сохранении */ })
+}
+
 function openCreate() {
   showExtra.value = false
   lockedHeight.value = 0
   editing.value = null
   editingSid.value = null
+  pwOwned.value = false
   form.value = { surname: '', name: '', patronymic: '', login: '', group: '', password: '', birthday: '' }
   formAtOpen = JSON.stringify(form.value)
   formError.value = ''
@@ -294,6 +315,7 @@ function openEdit(r) {
     login: r.login, group: r.group, password: '', birthday: r.birthday ?? '',
   }
   passwordSetAt.value = r.password_set_at || ''
+  checkOwned(r.login || '')
   formAtOpen = JSON.stringify(form.value)
   formError.value = ''
   showForm.value = true
@@ -525,17 +547,17 @@ async function del(r) {
             <div class="relative flex-1">
               <!-- Подсказка СЛОВАМИ, а не «••••••••»: точки в пустом поле читались как уже
                    заполненный пароль (живой прогон 01.10.2026). -->
-              <input v-model="form.password" :type="showPass ? 'text' : 'password'"
+              <input v-model="form.password" :type="showPass ? 'text' : 'password'" :disabled="pwOwned"
                      :placeholder="editing ? locale.t('adminStudents.passwordKeepPlaceholder', 'не менять') : locale.t('adminStudents.passwordNewPlaceholder', 'введите или нажмите ↻')"
-                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent" />
+                     class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 pr-10 text-sm text-text outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-60" />
               <button type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text3 hover:text-accent"
                       :aria-label="showPass ? locale.t('login.hide', 'Скрыть') : locale.t('login.show', 'Показать')" @click="showPass = !showPass">
                 <GbIcon :name="showPass ? 'hide' : 'show'" class="size-4" />
               </button>
             </div>
             <button type="button" :title="locale.t('password.generate', 'Сгенерировать пароль')"
-                    :aria-label="locale.t('password.generate', 'Сгенерировать пароль')"
-                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent"
+                    :aria-label="locale.t('password.generate', 'Сгенерировать пароль')" :disabled="pwOwned"
+                    class="grid size-10 shrink-0 place-items-center rounded-sm border border-border2 bg-card2 text-text3 outline-none hover:border-accent hover:text-accent focus:border-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border2 disabled:hover:text-text3"
                     @click="regeneratePassword">
               <RotateCw class="size-4" />
             </button>
@@ -548,7 +570,8 @@ async function del(r) {
               <Copy class="size-4" />
             </button>
           </div>
-          <span class="mt-1 block text-tiny text-text3">{{ editing
+          <span v-if="pwOwned" class="mt-1 block text-tiny text-accent">{{ locale.t('adminStudents.passwordOwned', 'Учётка принадлежит студенту: почта привязана, пароль он придумал сам. Сменить его нельзя — забытый пароль студент восстанавливает кодом из письма.') }}</span>
+          <span v-else class="mt-1 block text-tiny text-text3">{{ editing
             ? locale.t('password.replaceHint', 'Пусто — пароль останется прежним. Введите свой или нажмите ⟳ — заменит на новый.')
             : locale.t('password.generateHint', 'Нажмите ⟳ — сгенерируется пароль из 10 символов: строчные, заглавные, цифра и спецсимвол.') }}</span>
           <!-- Пустой пароль при создании — не ошибка (его выдают потом листом на группу),
