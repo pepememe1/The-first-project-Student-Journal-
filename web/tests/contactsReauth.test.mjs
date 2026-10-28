@@ -9,11 +9,12 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { allDictText } from './_dict.mjs'
 
 const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8')
 const card = read('../src/components/settings/ContactsCard.vue')
 const api = read('../src/api/endpoints.js')
-const dict = read('../src/i18n/dictionaries.js')
+const dict = allDictText()
 
 function body(name) {
   const m = card.match(new RegExp(`async function ${name}\\(\\) \\{([\\s\\S]*?)\\n\\}`))

@@ -64,7 +64,8 @@ export const SETTINGS_CATS = [
     i18n: 'settings.notifications',
     label: 'Уведомления',
     subs: [
-      { id: 'notify', i18n: 'settings.notifications', label: 'Что присылать' },
+      //Своя подпись: с ключом раздела в меню выходило «Уведомления → Уведомления».
+      { id: 'notify', i18n: 'settings.notifyWhat', label: 'Что присылать' },
     ],
   },
   {

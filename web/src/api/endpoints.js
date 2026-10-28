@@ -11,7 +11,7 @@
  * таблиц (включая password_hash и чужие оценки) — в браузер это выгружать нельзя.
  * /web/* возвращают только то, что роль вправе видеть, уже в готовом для UI виде.
  */
-import { api, rawApi } from './client'
+import { api, rawApi, sharedGet } from './client'
 import { peekCached } from './offlineCache'
 import { isDesktopApp } from '@/utils/platform'
 
@@ -91,7 +91,8 @@ export const easterApi = {
 }
 
 export const meApi = {
-  getPrefs: () => api.get('/me/prefs'),
+  //Пять сторов спрашивают настройки на старте почти разом — один запрос на всех.
+  getPrefs: () => sharedGet('/me/prefs'),
   // Ачивки за пасхалки. Сервер отдаёт только идентификаторы — названия и значки
   // статика и живут в config/achievements.js, где переводятся вместе с интерфейсом.
   achievements: () => api.get('/web/achievements'),

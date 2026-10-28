@@ -17,11 +17,11 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DICT_FILES, dictText } from './_dict.mjs'
 
 // ⚠️ fileURLToPath, а НЕ .pathname: на Windows последний даёт «/C:/…», и join
 // склеивает «C:\C:\…» — тест падает на несуществующем пути, не проверив ничего.
 const SRC = fileURLToPath(new URL('../src/', import.meta.url))
-const DICT = fileURLToPath(new URL('../src/i18n/dictionaries.js', import.meta.url))
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -34,8 +34,7 @@ function walk(dir, out = []) {
 
 /** Ключи русского словаря, в тексте которых есть подстановка вида {n}. */
 function keysWithPlaceholders() {
-  const raw = readFileSync(DICT, 'utf8')
-  const ru = raw.slice(raw.indexOf('ru: {'), raw.indexOf('en: {'))
+  const ru = dictText('ru')
   const out = new Set()
   for (const m of ru.matchAll(/'([\w.]+)':\s*'((?:[^'\\]|\\.)*)'/g)) {
     if (/\{[a-zA-Z_][\w]*\}/.test(m[2])) out.add(m[1])
@@ -43,7 +42,7 @@ function keysWithPlaceholders() {
   return out
 }
 
-const FILES = walk(SRC).filter((f) => !f.endsWith('dictionaries.js'))
+const FILES = walk(SRC).filter((f) => !DICT_FILES.some((d) => f.replace(/\\/g, '/').endsWith(d)))
 
 test('нет вызовов t() с тремя аргументами', () => {
   // `t('key', 'фолбэк', { … })` — третий аргумент просто отбрасывается, и подстановка

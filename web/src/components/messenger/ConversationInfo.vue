@@ -36,6 +36,7 @@ import { useLocaleStore } from '@/stores/locale'
 import { collegeDayKey, formatCollege } from '@/utils/collegeTime'
 import { mediaSrc } from '@/utils/mediaSrc'
 import GbIcon from '@/components/ui/GbIcon.vue'
+import TabBar from '@/components/ui/TabBar.vue'
 
 const emit = defineEmits(['close', 'search', 'summary', 'open-file'])
 const m = useMessengerStore()
@@ -574,14 +575,9 @@ function onChatAction(action) {
           <!-- ВКЛАДКИ. Разделение по смыслу: человек ищет «того участника», «ту
                картинку» и «тот документ» в разных местах, и одна общая лента не
                заменяет ни одного из трёх. -->
-          <div class="mb-3 flex gap-1 rounded-xl bg-card2 p-1">
-            <button v-for="[key, label, icon] in tabDefs" :key="key" type="button" @click="openTab(key)"
-                    class="flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs transition-colors"
-                    :class="tab === key ? 'bg-card text-text shadow-sm' : 'text-text3 hover:text-text'">
-              <component :is="icon" class="size-3.5" />
-              <span class="hidden sm:inline">{{ label }}</span>
-            </button>
-          </div>
+          <TabBar :model-value="tab" class="mb-3" stretch icons-on-mobile
+                  :tabs="tabDefs.map(([id, label, icon]) => ({ id, label, icon }))"
+                  @update:model-value="openTab" />
 
           <p v-if="tabLoading" class="py-8 text-center text-xs text-text3">
             {{ locale.t('common.loading', 'Загрузка…') }}

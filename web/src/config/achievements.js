@@ -85,6 +85,3 @@ export const RARITY = {
   legendary: { label: 'Легендарная', color: '#d4a017' },
   mythic:    { label: 'Мифическая',  color: '#e0455e' },
 }
-
-/** Порядковый вес ступени — для сортировки «сначала самое ценное». */
-export const RARITY_ORDER = Object.keys(RARITY)

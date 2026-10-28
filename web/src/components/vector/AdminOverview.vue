@@ -19,6 +19,8 @@ import { RotateCw } from '@lucide/vue'
 import { adminApi } from '@/api/endpoints'
 import { useLocaleStore } from '@/stores/locale'
 import { humanSize } from '@/utils/docPreview'
+import PageReveal from '@/components/ui/PageReveal.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const locale = useLocaleStore()
 
@@ -43,7 +45,11 @@ async function load() {
   online.value = si.status === 'fulfilled' ? si.value.data.online_count : null
   failed.value = !metrics.value && !counts.value
   loading.value = false
+  loaded.value = true
 }
+//Скелет — только до первого показа (PageReveal): по «Обновить» цифры меняются на месте, а
+//не пропадают вместе со всей панелью (28.10.2026).
+const loaded = ref(false)
 onMounted(load)
 
 // Размер базы — в тех же единицах, что называет Вектор («1.4 МБ»), а не «0.0 ГБ»:
@@ -96,8 +102,15 @@ function loadStatus(pct) {
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto p-4">
-      <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading', 'Загрузка…') }}</p>
-      <p v-else-if="failed" class="text-sm text-text3">
+      <PageReveal :loading="!loaded">
+        <template #skeleton>
+          <div class="flex flex-col gap-4">
+            <Skeleton :count="2" />
+            <Skeleton :count="4" />
+            <Skeleton kind="stats" :count="4" />
+          </div>
+        </template>
+      <p v-if="failed" class="text-sm text-text3">
         {{ locale.t('adminOverview.failed', 'Не удалось получить состояние сервера.') }}
       </p>
 
@@ -213,6 +226,7 @@ function loadStatus(pct) {
           </span>
         </p>
       </div>
+      </PageReveal>
     </div>
   </section>
 </template>

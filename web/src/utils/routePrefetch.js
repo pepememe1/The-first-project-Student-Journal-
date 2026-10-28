@@ -61,12 +61,20 @@ export function lazyLoadersForRole(routes, role) {
 }
 
 /**
- * Прогреть страницы роли. Возвращает промис — он нужен тестам и ничему больше:
- * вызывающий ничего не ждёт, в этом весь смысл.
+ * Прогреть страницы роли. `extra` — ленивые части оболочки (utils/lazyComponent.js,
+ * шрифт эмодзи): они идут ПЕРВЫМИ и греются даже на экономном режиме. До 28.10.2026 они
+ * лежали в главном чанке и грузились всегда, так что прогрев не тратит трафика сверх
+ * прежнего, а лишь уводит его с пути первой отрисовки; клик по шторке Вектора не должен
+ * показывать подгрузку. Возвращает промис — по нему оболочка ставит следующую очередь.
  */
-export function prefetchRoutes(routes, role) {
-  if (!role || !allowed()) return Promise.resolve(0)
-  const loaders = lazyLoadersForRole(routes, role)
+export function prefetchRoutes(routes, role, extra = []) {
+  if (!role) return Promise.resolve(0)
+  const pages = allowed() ? lazyLoadersForRole(routes, role) : []
+  return prefetchLoaders([...extra, ...pages])
+}
+
+/** Очередь прогрева: по одному загрузчику за раз, в простое время. */
+export function prefetchLoaders(loaders) {
   return new Promise((resolve) => {
     let i = 0
     let done = 0

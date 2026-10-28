@@ -16,9 +16,12 @@ import Badge from '@/components/ui/Badge.vue'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 
+//initial — заявки, уже загруженные страницей вместе с остальными данными: тогда блок
+//появляется в том же кадре, что и соседи, а не отдельным запросом следом (28.10.2026).
+const props = defineProps({ initial: { type: Array, default: null } })
 const toast = useToast()
 const { confirm } = useConfirm()
-const links = ref([])
+const links = ref(props.initial || [])
 const busy = ref('')
 
 const pending = computed(() => links.value.filter((l) => l.status === 'pending'))
@@ -46,7 +49,7 @@ async function decide(link, approve) {
   finally { busy.value = '' }
 }
 
-onMounted(load)
+onMounted(() => { if (!props.initial) load() })
 defineExpose({ load })
 </script>
 

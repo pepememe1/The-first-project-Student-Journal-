@@ -14,12 +14,16 @@ import { readFileSync } from 'node:fs'
 const SRC = readFileSync(new URL('../src/pages/teacher/TeacherJournal.vue', import.meta.url), 'utf8')
   .replace(/\r\n/g, '\n')
 
-/** Надпись «Загрузка…» заменяет таблицу только когда на экране журнал ДРУГОЙ пары. */
+/**
+ * Заглушка (с 28.10.2026 — скелет таблицы, `journalPending`) заменяет таблицу только когда
+ * на экране журнал ДРУГОЙ пары или нагрузка ещё не пришла. Состояние «идёт загрузка» в
+ * условие не входит: перечитывание после оценки идёт под живой таблицей.
+ */
 function placeholderOnlyForAnotherJournal(src) {
-  const line = src.split('\n').find((l) => l.includes("locale.t('common.loading')") && l.includes('v-else-if='))
-  if (!line) return false
-  const cond = line.match(/v-else-if="([^"]+)"/)[1]
-  return cond.includes('loading') && cond.includes('shownKey !== journalKey')
+  if (!/<div v-if="journalPending"/.test(src)) return false
+  const def = src.match(/const journalPending = computed\(\(\) => ([\s\S]*?)\)\n/)
+  if (!def) return false
+  return def[1].includes('shownKey.value !== journalKey.value') && !/\bloading\b/.test(def[1])
 }
 
 /** Ответ применяется только на ПОСЛЕДНИЙ запрос (иначе старый ответ откатит оценку). */
@@ -35,8 +39,8 @@ test('перечитывание того же журнала не убирае�
   assert.equal(placeholderOnlyForAnotherJournal(SRC), true)
 })
 
-test('обратный ход: прежнее условие «loading» проверка ловит', () => {
-  const broken = SRC.replace('v-else-if="loading && shownKey !== journalKey"', 'v-else-if="loading"')
+test('обратный ход: заглушка по «loading» проверка ловит', () => {
+  const broken = SRC.replace('const journalPending = computed(() => !workloadReady.value', 'const journalPending = computed(() => loading.value || !workloadReady.value')
   assert.notEqual(broken, SRC, 'обратный ход не нашёл строку, которую ломает')
   assert.equal(placeholderOnlyForAnotherJournal(broken), false)
 })

@@ -47,7 +47,7 @@ const vectorName = () => locale.t('chatThread.vectorName', 'Вектор')
 // можно поправить неверно распознанное слово перед отправкой Вектору.
 function onVoiceText(text) { vector.input = text }
 function onVoiceError(msg) { toast.error(msg) }
-const { messages, input, state, anim, label, cmds, tick, typingReveal } = storeToRefs(vector)
+const { messages, input, queued, state, anim, label, cmds, tick, typingReveal } = storeToRefs(vector)
 
 // Анимация «печати» ответа по символам — ТОЛЬКО здесь (в доке остаётся мгновенный вывод,
 // см. docs — правка). Двойной клик по печатающемуся сообщению сразу показывает целиком.
@@ -123,9 +123,12 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
       <span v-if="label" class="min-w-0 truncate text-xs text-text3">· {{ label }}</span>
     </div>
 
-    <!-- Маскот ФОНОМ (крупный, по центру) + чат полупрозрачным слоем поверх -->
-    <div class="relative min-h-0 flex-1 overflow-hidden">
-      <div class="pointer-events-none absolute inset-0 transition-opacity duration-300"
+    <!-- Маскот ФОНОМ (крупный, по центру) + чат полупрозрачным слоем поверх.
+         На широком экране (xl) — рядом, а не поверх: на 1920 пузырь чата закрывал тигра
+         по грудь и сам стоял почти пустым (находка N8, 28.10.2026). Слева Вектор во весь
+         рост, справа переписка своей колонкой. -->
+    <div class="relative min-h-0 flex-1 overflow-hidden xl:flex">
+      <div class="pointer-events-none absolute inset-0 transition-opacity duration-300 xl:static xl:w-2/5 xl:shrink-0"
            :class="{ 'opacity-15 sm:opacity-100': focused }">
         <!-- 🔥 НОЧНАЯ СМЕНА FNAF: Вектора может не быть на месте. Пустое место намеренно
              НЕ подписано — вся игра в том, чтобы человек заметил пропажу сам и позвал
@@ -137,9 +140,12 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
       <!-- Чат: верхний край ~40% высоты (уровень туловища), по центру, ограничен по
            ширине; подложка полупрозрачная + размытие — текст читаем, Вектор просвечивает.
            На телефоне при вводе разворачивается почти на всю высоту (top-3). -->
+      <!-- Сообщения прижаты к низу распоркой (flex-1): короткая переписка не висит у верха
+           пустого пузыря, длинная прокручивается как обычно. -->
       <div ref="scroller"
-           class="absolute inset-x-4 bottom-4 mx-auto max-w-3xl space-y-3 overflow-y-auto rounded-xl border border-border/60 bg-card/70 p-4 backdrop-blur-sm transition-[top] duration-300 sm:inset-x-8"
+           class="absolute inset-x-4 bottom-4 mx-auto flex max-w-3xl flex-col gap-3 overflow-y-auto rounded-xl border border-border/60 bg-card/70 p-4 backdrop-blur-sm transition-[top] duration-300 sm:inset-x-8 xl:static xl:my-4 xl:mr-4 xl:ml-0 xl:flex-1 xl:max-w-none"
            :class="focused ? 'top-3 sm:top-[40%]' : 'top-[40%]'">
+        <div class="flex-1" aria-hidden="true" />
         <template v-for="(m, i) in messages" :key="i">
           <div v-if="m.role === 'user'" class="flex justify-end">
             <div class="max-w-[80%] rounded-lg bg-accent px-4 py-2 text-sm text-white">{{ m.text }}</div>
@@ -151,11 +157,13 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
           </p>
         </template>
         <p v-if="state === 'thinking'" class="text-xs text-text2">{{ locale.t('vectorPage.thinking', { name: vectorName() }) }}</p>
+        <p v-if="queued" class="text-xs text-text2">{{ locale.t('vectorPage.queued', { q: queued.displayText || queued.text }) }}</p>
       </div>
     </div>
 
-    <!-- Ввод + кнопка «Быстрые команды» (попап, как в десктопе) -->
-    <div class="relative shrink-0 border-t border-border p-3">
+    <!-- Ввод + кнопка «Быстрые команды» (попап, как в десктопе). На xl — под колонкой
+         переписки, а не по центру карточки под тигром. -->
+    <div class="relative shrink-0 border-t border-border p-3 xl:pl-[calc(40%+0.75rem)] xl:pr-4">
       <transition name="pop">
         <div v-if="showQuick && cmds.length"
              class="absolute bottom-full left-3 right-3 mb-2 rounded-lg border border-border2 bg-card p-2 shadow-card">
@@ -171,21 +179,21 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
 
       <!-- Подписью, а не одним значком сетки: что за ней, без слова не понять (живой прогон
            23.10.2026), а у поля ввода на телефоне так остаётся больше места. -->
-      <div v-if="cmds.length" class="mx-auto mb-2 flex max-w-3xl">
+      <div v-if="cmds.length" class="mx-auto mb-2 flex max-w-3xl xl:max-w-none">
         <button type="button" @click="showQuick = !showQuick" :aria-expanded="showQuick"
                 class="inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-sm font-medium transition-colors pointer-coarse:min-h-11"
                 :class="showQuick ? 'border-accent bg-accent-glow text-accent' : 'border-border2 bg-card2 text-text2 hover:border-accent hover:text-accent'">
           <LayoutGrid class="size-4" aria-hidden="true" />{{ locale.t('vectorPage.quickCommands', 'Быстрые команды') }}
         </button>
       </div>
-      <form class="mx-auto flex max-w-3xl items-center gap-2" @submit.prevent="send">
+      <form class="mx-auto flex max-w-3xl items-center gap-2 xl:max-w-none" @submit.prevent="send">
         <MicButton @text="onVoiceText" @error="onVoiceError" />
         <input v-model="input" :placeholder="locale.t('vectorPage.askPlaceholder', { name: vectorName() })"
                @focus="showQuick = false; focused = true" @blur="focused = false"
                class="h-11 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3.5 text-text outline-none focus:border-accent focus:bg-card" />
         <button type="submit" :aria-label="locale.t('vectorPage.send', 'Отправить')"
                 class="grid size-11 shrink-0 place-items-center rounded-sm bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50"
-                :disabled="state === 'thinking' || !input.trim()">
+                :disabled="!input.trim()">
           <Send class="size-5" />
         </button>
       </form>

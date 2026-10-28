@@ -79,3 +79,68 @@ test('сбой загрузки одной страницы не роняет п
   //Прогрев — не событие: упавшая страница просто доедет при переходе, как и до правки.
   assert.equal(await prefetchRoutes(routes, 'student'), 1)
 })
+
+// ── Ленивые части оболочки (utils/lazyComponent.js, 28.10.2026) ──────────────────────
+//Переводы строк — к \n: на диске с CRLF `$` в многострочной регулярке не срабатывает,
+//и сторож статических импортов был бы слеп на Windows.
+const SRC = (p) => readFileSync(fileURLToPath(new URL('../src/' + p, import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+
+test('ленивые части оболочки греются первыми, страницы роли — следом', async () => {
+  const order = []
+  const routes = [{ path: '/s', meta: { role: 'student' }, component: {}, children: [
+    { path: 'a', component: () => { order.push('page'); return Promise.resolve({}) } },
+  ] }]
+  const extra = [() => { order.push('dock'); return Promise.resolve({}) }]
+  assert.equal(await prefetchRoutes(routes, 'student', extra), 2)
+  //Шторку Вектора и окна активностей открывают со страницы, на которой человек уже стоит:
+  //они должны быть на месте раньше, чем страницы, до которых ещё надо дойти по меню.
+  assert.deepEqual(order, ['dock', 'page'])
+})
+
+test('на экономном режиме части оболочки греются, страницы — нет', async () => {
+  //Части оболочки раньше лежали в главном чанке и грузились всегда — прогрев не тратит
+  //трафика сверх прежнего. Страницы впрок на экономном режиме не качаем, как и до правки.
+  const was = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  Object.defineProperty(globalThis, 'navigator', { value: { connection: { saveData: true } }, configurable: true })
+  try {
+    const order = []
+    const routes = [{ path: '/s', meta: { role: 'student' }, component: {}, children: [
+      { path: 'a', component: () => { order.push('page'); return Promise.resolve({}) } },
+    ] }]
+    await prefetchRoutes(routes, 'student', [() => { order.push('dock'); return Promise.resolve({}) }])
+    assert.deepEqual(order, ['dock'])
+  } finally {
+    if (was) Object.defineProperty(globalThis, 'navigator', was)
+    else delete globalThis.navigator
+  }
+})
+
+test('оболочка отдаёт свои ленивые части в прогрев', () => {
+  //Без этого вызова service worker не положит чанк в кэш, и без сети шторка Вектора не
+  //открылась бы у того, кто ни разу её не открывал.
+  assert.match(SRC('layouts/AppShell.vue'), /prefetchRoutes\(appRoutes, auth\.role, \[\.\.\.warmLoaders\(\), warmEmojiFont\]\)/)
+})
+
+test('прогревы вызваны там, где обещаны', () => {
+  //Функция прогрева без вызывающего молча не греет ничего — тесты её поведения остались бы
+  //зелёными, а первое открытие Вектора или окна второго фактора снова показывало бы подгрузку.
+  const shell = SRC('layouts/AppShell.vue')
+  assert.match(shell, /\.then\(\(\) => prefetchLoaders\(animLoaders\('chat'\)\)\)/, 'анимации Вектора')
+  assert.match(shell, /warmAlso\(\(\) => import\('@\/components\/activity\/quiz\/QuizEditor\.vue'\)\)/, 'редактор квиза')
+  assert.match(SRC('pages/LoginPage.vue'), /prefetchLoaders\(\[\.\.\.Object\.values\(LOGIN_DIALOGS\), warmEmojiFont\]\)/, 'окна входа и шрифт')
+  assert.match(SRC('components/activity/ActivityLauncher.vue'), /prefetchLoaders\(\[loadQuizEditor\]\)/, 'редактор при открытом колесе')
+})
+
+test('то, что открывает меньшинство, не вернулось в главный чанк', () => {
+  //По файлу, а не по имени переменной: импорт под другим именем тянет тот же чанк.
+  const statics = (file) => [...SRC(file).matchAll(/^import \w+ from '[^']*\/(\w+)\.vue'$/gm)].map((m) => m[1])
+  const heavy = {
+    'layouts/AppShell.vue': ['VectorDock', 'ActivityLauncher', 'ActivityPortfolio', 'AccountOnboardingDialog'],
+    'components/activity/ActivityShell.vue': ['QuizPlayer', 'BoardCanvas', 'PulsePlayer', 'PollPlayer', 'TimerPanel', 'ActivityPortfolio'],
+    'pages/LoginPage.vue': ['MfaPrompt', 'DeviceApproval', 'RegisterDialog', 'RecoverDialog', 'PasswordRecoveryDialog'],
+  }
+  for (const [file, names] of Object.entries(heavy)) {
+    const back = statics(file).filter((n) => names.includes(n))
+    assert.deepEqual(back, [], `${file}: статический импорт снова тянет их в первую загрузку`)
+  }
+})

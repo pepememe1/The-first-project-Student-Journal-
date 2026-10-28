@@ -12,8 +12,15 @@ import { useAuthStore } from '@/stores/auth'
 import { useActivityStore } from '@/stores/activity'
 import { activitiesApi } from '@/api/endpoints'
 import { hasOpenDialog } from '@/directives/dialog'
-import QuizEditor from './quiz/QuizEditor.vue'
+import { lazyComponent } from '@/utils/lazyComponent'
+import { prefetchLoaders } from '@/utils/routePrefetch'
 import ActivityWheel from './ActivityWheel.vue'
+
+//Редактор квиза открывают из колеса не каждый раз — отдельным чанком. Лаунчер сам ленивый,
+//поэтому в общий прогрев оболочки редактор не успевает: догружаем его, пока человек
+//выбирает в колесе (onMounted ниже), чтобы «создать квиз» открылся без паузы.
+const loadQuizEditor = () => import('./quiz/QuizEditor.vue')
+const QuizEditor = lazyComponent(loadQuizEditor, { warm: false })
 
 const props = defineProps({ conversationId: { type: String, required: true } })
 const emit = defineEmits(['close'])
@@ -49,7 +56,10 @@ function onKey(e) {
   if (e.key !== 'Escape' || e.defaultPrevented || hasOpenDialog()) return
   if (chosen.value) { chosen.value = '' } else { emit('close') }
 }
-onMounted(() => window.addEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  prefetchLoaders([loadQuizEditor])
+})
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 const busy = ref(false)
 const title = ref('')

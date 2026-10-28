@@ -201,6 +201,21 @@ export function groupAverage(studentAverages) {
 }
 
 /**
+ * На какую отметку «тянет» средний — зеркало `grading.MARK_EDGES` и `grading.mark_of_average`
+ * (контракт `mark_of_average`): 0 — оценок нет, 2 — ниже всех границ. Своих 4.5/3.5/2.5 в
+ * компонентах не заводить (§4.44): до 28.10.2026 они жили в шести местах с нижней границей 3,
+ * и средний 2.5–2.99 был в вебе красным, а сервер считал его тройкой.
+ */
+export const MARK_EDGES = [[5, 4.5], [4, 3.5], [3, 2.5]]
+
+export function markOfAverage(avg) {
+  const v = Number(avg)
+  if (!v) return 0
+  for (const [mark, edge] of MARK_EDGES) if (v >= edge) return mark
+  return 2
+}
+
+/**
  * Округление ДО ДВУХ ЗНАКОВ ПО ПРАВИЛАМ PYTHON, а не по правилам JavaScript.
  *
  * 🔥 Это не педантизм, а настоящее расхождение на обычных данных. `round()` в Python

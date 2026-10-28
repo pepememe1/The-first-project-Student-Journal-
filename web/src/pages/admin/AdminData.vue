@@ -28,6 +28,11 @@ const { confirm } = useConfirm()
 const datasets = ref([])          // [{name, label, count}]
 const pickedExport = ref([])
 const exporting = ref(false)
+//Пока список не пришёл (сервер считает строки, на стенде ~0.7 с), его место держат
+//заглушки той же высоты: иначе пришедший список толкал вниз раздел загрузки (замер
+//28.10.2026, сдвиг макета 0.08). Наборов двенадцать — `data_transfer.DATASETS`.
+const datasetsReady = ref(false)
+const DATASET_SLOTS = 12
 
 onMounted(async () => {
   try {
@@ -35,6 +40,7 @@ onMounted(async () => {
     // По умолчанию отмечаем ВСЁ: типичный сценарий — полная резервная копия.
     pickedExport.value = datasets.value.map((d) => d.name)
   } catch { toast.error(locale.t('adminData.datasetsLoadFailed', 'Не удалось получить список наборов данных')) }
+  datasetsReady.value = true
 })
 
 const totalRows = computed(() =>
@@ -142,7 +148,10 @@ async function doImport() {
         </div>
       </div>
 
-      <div class="grid grid-cols-1 gap-1 sm:grid-cols-2">
+      <div v-if="!datasetsReady" class="grid grid-cols-1 gap-1 sm:grid-cols-2" aria-busy="true">
+        <div v-for="i in DATASET_SLOTS" :key="i" class="gb-skeleton h-8 rounded-sm" />
+      </div>
+      <div v-else class="gb-reveal grid grid-cols-1 gap-1 sm:grid-cols-2">
         <label v-for="d in datasets" :key="d.name"
                class="flex cursor-pointer items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm hover:bg-bg2">
           <input type="checkbox" :value="d.name" v-model="pickedExport" class="accent-accent" />

@@ -27,7 +27,7 @@ const vectorName = () => locale.t('chatThread.vectorName', 'Вектор')
 // можно поправить неверно распознанное слово перед отправкой Вектору.
 function onVoiceText(text) { vector.input = text }
 function onVoiceError(msg) { toast.error(msg) }
-const { messages, input, state, anim, label, cmds, tick, typingReveal } = storeToRefs(vector)
+const { messages, input, queued, state, anim, label, cmds, tick, typingReveal } = storeToRefs(vector)
 const { enabled: ttsEnabled, speaking } = storeToRefs(tts)
 const scroller = ref(null)
 const showQuick = ref(false)
@@ -111,6 +111,7 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
           </p>
         </template>
         <p v-if="state === 'thinking'" class="text-xs text-text2">{{ locale.t('vectorPage.thinking', { name: vectorName() }) }}</p>
+        <p v-if="queued" class="text-xs text-text2">{{ locale.t('vectorPage.queued', { q: queued.displayText || queued.text }) }}</p>
       </div>
     </div>
 
@@ -140,7 +141,7 @@ function ask(cmd) { showQuick.value = false; vector.ask(cmd.q, cmd.label) }
                class="h-10 min-w-0 flex-1 rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent focus:bg-card" />
         <button type="submit" :aria-label="locale.t('vectorPage.send', 'Отправить')"
                 class="grid size-10 shrink-0 place-items-center rounded-sm bg-accent text-white transition-colors hover:bg-accent2 disabled:opacity-50"
-                :disabled="state === 'thinking' || !input.trim()">
+                :disabled="!input.trim()">
           <Send class="size-4" />
         </button>
       </form>

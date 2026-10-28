@@ -9,6 +9,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Gauge from '@/components/ui/Gauge.vue'
 import { TrendingUp } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
+import { markColor } from '@/utils/markTone'
 
 const locale = useLocaleStore()
 
@@ -21,14 +22,8 @@ onMounted(async () => {
 
 const perSubject = computed(() => data.value?.per_subject || [])
 // Цвет полосы/кольца по уровню оценки (как в десктопе: 5 → акцент … <3 → красный).
-function barColor(v) {
-  const n = Number(v) || 0
-  if (n >= 4.5) return 'var(--gb-accent)'
-  if (n >= 3.5) return '#3b82f6'
-  if (n >= 3) return '#f59e0b'
-  if (n > 0) return '#ef4444'
-  return 'var(--gb-border2)'
-}
+//Цвет среднего — одна лесенка на интерфейс и токены темы (utils/markTone.js).
+const barColor = markColor
 </script>
 
 <template>

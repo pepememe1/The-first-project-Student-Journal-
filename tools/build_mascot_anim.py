@@ -41,7 +41,10 @@ FPS = 12
 # 640 с запасом; прозрачные поля WebP жмёт почти в ноль, размер держим качеством.
 TARGET_H = 640
 QUALITY = 80
-METHOD = 4  # 0..6, компромисс сжатие/скорость (6 слишком медленный на больших кадрах)
+# 0..6: 6 вместе с minimize_size в save_webp даёт на 11 % меньше при том же QUALITY (замер
+# 28.10.2026: 2.30 → 2.05 МБ, «говорит» 211 → 117 КБ, PSNR к прежней сборке 37–38 дБ).
+# Сборка дольше на минуты, но запускается раз в месяц, а файлы качает каждый человек.
+METHOD = 6
 
 # Пауза-покой (сек) в КОНЦЕ цикла: анимация проигрывается, потом маскот «стоит» это
 # время, потом цикл повторяется. Нужно ТОЛЬКО покою (idle) — иначе непрерывное движение
@@ -129,7 +132,7 @@ def save_webp(frames: list[Image.Image], path: str, loop: int = 0) -> int:
     нестабильно), а идентичные кадры WebP сжимает почти в ноль (размер не растёт)."""
     frames[0].save(path, format="WEBP", save_all=True, append_images=frames[1:],
                    duration=int(1000 / FPS), loop=loop, disposal=2,
-                   lossless=False, quality=QUALITY, method=METHOD)
+                   lossless=False, quality=QUALITY, method=METHOD, minimize_size=True)
     return os.path.getsize(path)
 
 

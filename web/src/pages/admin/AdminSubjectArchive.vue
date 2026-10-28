@@ -75,7 +75,9 @@ onMounted(async () => {
     groups.value = (await adminApi.groups()).data.groups || []
     group.value = groupsForCategory.value[0]?.name || ''
   } catch { groups.value = [] }
-  await load()
+  //Архив грузит watch(group): выбор группы выше его и запускает, а прямой вызов здесь
+  //удваивал запрос. Нужен только тот случай, когда группы нет (сбросить данные).
+  if (!group.value) await load()
 })
 </script>
 

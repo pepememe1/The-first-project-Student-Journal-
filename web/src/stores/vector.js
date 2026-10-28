@@ -44,6 +44,9 @@ export const useVectorStore = defineStore('vector', () => {
     }
   })
   const input = ref('')
+  //Вопрос, заданный, пока Вектор отвечал на прежний: уходит сразу после ответа. Раньше
+  //Enter в это время молча ничего не делал, а быстрая команда стирала набранное (28.10.2026).
+  const queued = ref(null)
   const state = ref('greeting')      // greeting | idle | thinking | speaking
   const lastMood = ref('neutral')
   const lastIntent = ref('help')
@@ -194,8 +197,14 @@ export const useVectorStore = defineStore('vector', () => {
     //Разблокируем автоплей ПРЯМО в жесте (клик/Enter): дальше будет сетевой запрос, и
     //без этого браузер зарежет воспроизведение WAV после паузы (см. tts.unlock).
     tts.unlock()
-    const t = (text ?? input.value).trim()
-    if (!t || state.value === 'thinking') return
+    const fromInput = text === undefined || text === null
+    const t = (fromInput ? input.value : text).trim()
+    if (!t) return
+    if (state.value === 'thinking') {
+      queued.value = { text: t, displayText }
+      if (fromInput) input.value = ''
+      return
+    }
     // 🔥 НОЧНАЯ СМЕНА FNAF. Если Вектора «нет на месте», заданный вопрос его возвращает.
     // Хук стоит ЗДЕСЬ, а не в двух компонентах: спросить можно и со вкладки «ИИ
     // Помощник», и из боковой шторки, и одно из двух мест однажды забыли бы — это наш
@@ -207,7 +216,8 @@ export const useVectorStore = defineStore('vector', () => {
     //Прошлый ответ ещё «печатался» — договаривать нечего, раз уже спросили новое.
     _completeTyping()
     messages.value.push({ role: 'user', text: (displayText || '').trim() || t })
-    input.value = ''
+    //Поле чистим, только если вопрос из него: быстрая команда и голос набранное не стирают.
+    if (fromInput) input.value = ''
     state.value = 'thinking'
     tick.value++
     let answer = null
@@ -231,7 +241,10 @@ export const useVectorStore = defineStore('vector', () => {
       // отвечает офлайн-помощник по сохранённым данным (см. utils/vectorOffline.js).
       // Различать обязательно: ответ с кодом (даже 500) означает, что сервер на связи,
       // и подменять его локальным разбором нельзя — там ответ полнее и он авторитетнее.
-      if (isStaleSession(e)) return   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
+      if (isStaleSession(e)) {   //Отказ прежней сессии (вышли и вошли другим) — продолжение чужой сессии молчит.
+        queued.value = null
+        return
+      }
       if (!e.response) {
         const local = answerOffline(t)
         lastIntent.value = local.intent
@@ -307,6 +320,11 @@ export const useVectorStore = defineStore('vector', () => {
         //Озвучки нет (выключена/ошибка) — печатаем всё равно, запасным темпом по символам.
         if (answer) _startTyping(msgIndex, answer, null)
       }
+      //Вопрос, заданный во время ответа, уходит следом — как новый вопрос: прежний ответ
+      //уже на экране, его озвучка уступает новому (barge-in, как при обычной отправке).
+      const next = queued.value
+      queued.value = null
+      if (next) send(next.text, next.displayText)
     }
   }
   function ask(q, displayText) { send(q, displayText) }
@@ -324,6 +342,7 @@ export const useVectorStore = defineStore('vector', () => {
   function reset() {
     messages.value = [{ role: 'vector', text: greetingText() }]
     input.value = ''
+    queued.value = null
     state.value = 'greeting'
     lastMood.value = 'neutral'
     lastIntent.value = 'help'
@@ -332,7 +351,7 @@ export const useVectorStore = defineStore('vector', () => {
     greeted = false
   }
 
-  return { messages, input, state, lastMood, lastIntent, tick, collapsed, setCollapsed,
+  return { messages, input, queued, state, lastMood, lastIntent, tick, collapsed, setCollapsed,
            sprite, anim, label, cmds, send, ask, greetSettle, greetOnce,
            typingReveal, skipTyping, reset }
 })

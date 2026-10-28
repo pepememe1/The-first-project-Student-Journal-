@@ -662,11 +662,14 @@ function isHover(day, slot) {
           </div>
 
           <div v-if="isCollege" class="ml-auto flex flex-wrap items-center gap-2">
-            <AppButton variant="ghost" size="sm" @click="refreshGroup"><GbIcon name="refresh" class="size-4 shrink-0" />{{ locale.t('adminSchedule.pullFromPortal', 'Взять с ВСГУТУ') }}</AppButton>
-            <AppButton variant="ghost" size="sm" @click="refreshAll"><GbIcon name="refresh" class="size-4 shrink-0" />{{ locale.t('adminSchedule.pullAllGroups', 'Все группы') }}</AppButton>
-            <AppButton variant="ghost" size="sm" @click="resetGroup">{{ locale.t('adminSchedule.resetGroupBtn', 'Сброс группы') }}</AppButton>
-            <AppButton variant="ghost" size="sm" @click="resetAll">{{ locale.t('adminSchedule.resetAllBtn', 'Сброс всех') }}</AppButton>
-            <AppButton variant="ghost" size="sm" :disabled="publishing || !group" @click="notifyGroup">{{ locale.t('adminSchedule.notifyGroupBtn', 'Сообщить группе') }}</AppButton>
+            <!-- Одно действие — один значок (находка N15): «взять с портала» — загрузка и
+                 для группы, и для всех; «сбросить правки» — ластик; «сообщить» — отправка.
+                 Раньше значок «обновить» стоял на двух разных кнопках, а сброс шёл без значка. -->
+            <AppButton variant="ghost" size="sm" @click="refreshGroup"><GbIcon name="download" class="size-4 shrink-0" />{{ locale.t('adminSchedule.pullFromPortal', 'Взять с ВСГУТУ') }}</AppButton>
+            <AppButton variant="ghost" size="sm" @click="refreshAll"><GbIcon name="download" class="size-4 shrink-0" />{{ locale.t('adminSchedule.pullAllGroups', 'Взять все группы') }}</AppButton>
+            <AppButton variant="ghost" size="sm" @click="resetGroup"><GbIcon name="clear" class="size-4 shrink-0" />{{ locale.t('adminSchedule.resetGroupBtn', 'Сброс группы') }}</AppButton>
+            <AppButton variant="ghost" size="sm" @click="resetAll"><GbIcon name="clear" class="size-4 shrink-0" />{{ locale.t('adminSchedule.resetAllBtn', 'Сброс всех') }}</AppButton>
+            <AppButton variant="ghost" size="sm" :disabled="publishing || !group" @click="notifyGroup"><GbIcon name="send" class="size-4 shrink-0" />{{ locale.t('adminSchedule.notifyGroupBtn', 'Сообщить группе') }}</AppButton>
           </div>
           <AppButton v-else variant="ghost" size="sm" class="ml-auto" @click="load"><RotateCw class="size-3.5" /> {{ locale.t('schedulePage.refresh', 'Обновить') }}</AppButton>
         </div>

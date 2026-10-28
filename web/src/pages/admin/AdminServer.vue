@@ -24,6 +24,7 @@ import { adminApi, deskServerApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
 import Badge from '@/components/ui/Badge.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import TabBar from '@/components/ui/TabBar.vue'
 import UsageBar from '@/components/server/UsageBar.vue'
 import RemoteConsole from '@/components/server/RemoteConsole.vue'
 import MigrationWizard from '@/components/server/MigrationWizard.vue'
@@ -286,19 +287,12 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
       </div>
 
       <template v-if="pickedServer">
-        <div class="mb-4 flex gap-1 overflow-x-auto border-b border-border">
-          <button v-for="t in [
-                    { id: 'state', label: locale.t('adminServer.tabState', 'Состояние и службы'), icon: HardDrive },
-                    { id: 'backups', label: locale.t('adminServer.tabBackups', 'Резервные копии'), icon: Archive },
-                    { id: 'console', label: locale.t('adminServer.tabConsole', 'Команды'), icon: Terminal },
-                    { id: 'migrate', label: locale.t('adminServer.tabMigrate', 'Перенос'), icon: ArrowRightLeft }]"
-                  :key="t.id" type="button"
-                  class="-mb-px shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors"
-                  :class="tab === t.id ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'"
-                  @click="tab = t.id">
-            <component :is="t.icon" class="mr-1.5 inline size-4" />{{ t.label }}
-          </button>
-        </div>
+        <TabBar v-model="tab" class="mb-4" :tabs="[
+          { id: 'state', label: locale.t('adminServer.tabState', 'Состояние и службы'), icon: HardDrive },
+          { id: 'backups', label: locale.t('adminServer.tabBackups', 'Резервные копии'), icon: Archive },
+          { id: 'console', label: locale.t('adminServer.tabConsole', 'Команды'), icon: Terminal },
+          { id: 'migrate', label: locale.t('adminServer.tabMigrate', 'Перенос'), icon: ArrowRightLeft },
+        ]" />
 
         <!-- Состояние удалённой машины + управление службами -->
         <div v-if="tab === 'state'" class="flex flex-col gap-5">

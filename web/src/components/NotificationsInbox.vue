@@ -15,6 +15,7 @@ import { meApi, teacherApi, adminApi, eventsApi } from '@/api/endpoints'
 import { useAuthStore } from '@/stores/auth'
 import { useLocaleStore } from '@/stores/locale'
 import AppButton from '@/components/ui/AppButton.vue'
+import TabBar from '@/components/ui/TabBar.vue'
 import { collegeDayKey, formatCollege } from '@/utils/collegeTime'
 
 const auth = useAuthStore()
@@ -216,23 +217,15 @@ async function submitEvent() {
   <div>
     <!-- ── Список писем. Само письмо — отдельная страница (`NotificationDetailPage`). ── -->
     <div>
-      <div class="mb-3 flex flex-wrap items-center gap-1 border-b border-border">
-        <!-- Вкладки-категории в духе Gmail: подчёркивание активной, а не заливка.
-             Залитая пилюля читалась как кнопка действия, хотя это фильтр списка. -->
-        <button v-for="t in TABS" :key="t.key" type="button"
-                class="-mb-px border-b-2 px-3 py-2 text-sm transition-colors"
-                :class="tab === t.key ? 'border-accent font-semibold text-accent'
-                                      : 'border-transparent text-text3 hover:text-text'"
-                @click="tab = t.key">
-          {{ t.label }}
-          <span v-if="tabUnread(t.key)"
-                class="ml-1 text-tiny"
-                :class="tab === t.key ? 'text-bg opacity-80' : 'text-accent'">{{ tabUnread(t.key) }}</span>
-        </button>
-        <AppButton v-if="canCreateEvent" variant="ghost" class="ml-auto" @click="openCreate">
-          <Megaphone class="mr-1.5 inline size-4" />{{ locale.t('notifications.createEvent', 'Создать мероприятие') }}
-        </AppButton>
-      </div>
+      <!-- Вкладки-категории в духе Gmail: подчёркивание активной, а не заливка. -->
+      <TabBar v-model="tab" class="mb-3"
+              :tabs="TABS.map((t) => ({ id: t.key, label: t.label, count: tabUnread(t.key) }))">
+        <template #end>
+          <AppButton v-if="canCreateEvent" variant="ghost" class="ml-auto shrink-0" @click="openCreate">
+            <Megaphone class="mr-1.5 inline size-4" />{{ locale.t('notifications.createEvent', 'Создать мероприятие') }}
+          </AppButton>
+        </template>
+      </TabBar>
 
       <!-- Форма создания мероприятия/события (препод/админ) -->
       <div v-if="showCreate" class="mb-4 rounded-lg border border-border2 bg-card2 p-3">

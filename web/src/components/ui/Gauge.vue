@@ -1,7 +1,8 @@
 <script setup>
 // Gauge — кольцевой индикатор среднего балла (0..max) на чистом SVG, без библиотек.
-// Цвет кольца — по уровню оценки (5 → акцент, 4 → синий, 3 → оранж, <3 → красный).
+// Цвет кольца — по отметке, на которую тянет средний (utils/markTone.js, grading.MARK_EDGES).
 import { computed } from 'vue'
+import { markColor } from '@/utils/markTone'
 const props = defineProps({
   value: { type: Number, default: 0 },
   max: { type: Number, default: 5 },
@@ -11,14 +12,7 @@ const R = 52
 const CIRC = 2 * Math.PI * R
 const pct = computed(() => Math.max(0, Math.min(1, (props.value || 0) / props.max)))
 const dash = computed(() => `${CIRC * pct.value} ${CIRC}`)
-const color = computed(() => {
-  const v = props.value || 0
-  if (v >= 4.5) return 'var(--gb-accent)'
-  if (v >= 3.5) return '#3b82f6'
-  if (v >= 3) return '#f59e0b'
-  if (v > 0) return '#ef4444'
-  return 'var(--gb-border2)'
-})
+const color = computed(() => markColor(props.value))
 </script>
 
 <template>

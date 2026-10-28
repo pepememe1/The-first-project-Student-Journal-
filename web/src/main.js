@@ -14,6 +14,7 @@ import { publicSiteOrigin } from './api/server'
 import { useThemeStore } from './stores/theme'
 import { useA11yStore } from './stores/a11y'
 import { useAuthStore } from './stores/auth'
+import { useLocaleStore } from './stores/locale'
 
 const app = createApp(App)
 app.use(createPinia())
@@ -93,7 +94,9 @@ document.addEventListener('contextmenu', (e) => {
   e.preventDefault()
 })
 
-app.mount('#app')
+//Словарь выбранного языка (en, zh) грузится отдельным куском: монтируем, когда он готов,
+//иначе первый кадр мелькнул бы по-русски. Русскому ждать нечего — он уже в бандле.
+useLocaleStore().ready.finally(() => app.mount('#app'))
 
 // OTA-обновления (Capgo, только в приложении): подтверждаем, что новый бандл успешно
 // загрузился — иначе плагин откатится на предыдущий (защита от «кирпича»).

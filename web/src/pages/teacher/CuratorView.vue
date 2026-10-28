@@ -16,6 +16,8 @@ import { useLocaleStore } from '@/stores/locale'
 import InviteDialog from '@/components/admin/InviteDialog.vue'
 import RolloutDialog from '@/components/account/RolloutDialog.vue'
 import GbIcon from '@/components/ui/GbIcon.vue'
+import TabBar from '@/components/ui/TabBar.vue'
+import { markTextClass } from '@/utils/markTone'
 
 const { confirm } = useConfirm()
 const toast = useToast()
@@ -108,12 +110,12 @@ async function doPromote() {
   finally { promoting.value = false }
 }
 
+//Предметы и риск грузят наблюдатели за группой ниже: выбор первой группы их и запускает.
+//Риск — сразу вместе с предметами: счётчик на вкладке должен быть правдой с первого показа.
+//Прямые вызовы здесь удваивали оба запроса на каждом входе (замер 28.10.2026).
 onMounted(async () => {
   try { groups.value = (await curatorApi.groups()).data.groups || [] } catch { groups.value = [] }
   group.value = groups.value[0] || ''
-  await loadSubjects()
-  //Риск грузим сразу: счётчик на вкладке должен быть правдой с первого показа страницы.
-  loadRisk()
 })
 
 async function loadSubjects() {
@@ -239,14 +241,8 @@ function gradeClass(v) {
   if (v === 'Б' || v === 'О') return 'text-text3 font-semibold'
   return 'text-text2'
 }
-function avgClass(a) {
-  const n = Number(a) || 0
-  if (n >= 4.5) return 'text-accent'
-  if (n >= 3.5) return 'text-blue'
-  if (n >= 3) return 'text-orange'
-  if (n > 0) return 'text-red'
-  return 'text-text3'
-}
+//Цвет среднего — одна лесенка на интерфейс (utils/markTone.js, границы grading.MARK_EDGES).
+const avgClass = markTextClass
 
 // ── Экспорт отчёта успеваемости (Excel/Word, выбор групп) ───────────────────────────
 const showExport = ref(false)
@@ -288,7 +284,9 @@ async function exportReport(fmt) {
                 :message="locale.t('curatorView.noCuratorMessage', 'Администратор пока не назначил вам курируемые группы.')" />
     <template v-else>
       <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-        <select v-model="group" @change="loadSubjects"
+        <!-- Без @change: предметы грузит watch(group), второй вызов удваивал запрос и
+             обнулял список, пока шёл ответ первого (аудит 28.10.2026). -->
+        <select v-model="group"
                 class="h-10 w-full rounded-sm border border-border2 bg-card2 px-3 text-sm text-text outline-none focus:border-accent sm:w-auto">
           <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
         </select>
@@ -330,7 +328,8 @@ async function exportReport(fmt) {
               t2: subgroupInfo.teacher_name_2 || locale.t('curatorView.splitSameTeacher', 'та же/не назначен'),
             }) }}
           </span>
-          <button type="button" class="ml-auto text-sm font-medium text-accent hover:underline" @click="openSubgroups">
+          <button type="button" class="ml-auto flex h-10 items-center gap-1.5 rounded-sm border border-border2 bg-card px-3 text-sm font-medium text-text2 hover:border-accent hover:text-accent"
+                  @click="openSubgroups">
             <GbIcon name="group" class="size-4 shrink-0" /> {{ locale.t('curatorView.subgroupsButton', 'Подгруппы') }}
           </button>
         </template>
@@ -339,27 +338,13 @@ async function exportReport(fmt) {
       <InviteDialog v-if="showInvite" :group="group" @close="showInvite = false" />
 
       <!-- Журнал (read-only) / ЗЕТ·Перевод (docs/done/PLAN-ZET.md §7.4) -->
-      <div class="flex gap-1 border-b border-border">
-        <button type="button" @click="viewMode = 'journal'"
-                class="border-b-2 px-3 py-2 text-sm font-medium"
-                :class="viewMode === 'journal' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
-          {{ locale.t('curatorView.tabJournal', 'Журнал') }} <GbIcon name="show" class="inline-block size-3.5 align-[-2px]" />
-        </button>
-        <button type="button" @click="viewMode = 'zet'"
-                class="border-b-2 px-3 py-2 text-sm font-medium"
-                :class="viewMode === 'zet' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
-          {{ locale.t('curatorView.tabZet', 'Перевод на курс (ЗЕТ)') }}
-        </button>
-        <!-- Риск отчисления (3.6). Счётчик стоит прямо на вкладке: куратор обязан
-             увидеть, что там кто-то есть, НЕ открывая её. -->
-        <button type="button" @click="viewMode = 'risk'"
-                class="flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium"
-                :class="viewMode === 'risk' ? 'border-accent text-accent' : 'border-transparent text-text3 hover:text-text2'">
-          {{ locale.t('curatorView.tabRisk', 'Риск отчисления') }}
-          <span v-if="riskReport?.at_risk"
-                class="rounded-full bg-red px-1.5 text-[11px] font-bold text-white">{{ riskReport.at_risk }}</span>
-        </button>
-      </div>
+      <!-- Риск отчисления (3.6): счётчик стоит прямо на вкладке — куратор обязан увидеть,
+           что там кто-то есть, НЕ открывая её. -->
+      <TabBar v-model="viewMode" :tabs="[
+        { id: 'journal', label: locale.t('curatorView.tabJournal', 'Журнал') },
+        { id: 'zet', label: locale.t('curatorView.tabZet', 'Перевод на курс (ЗЕТ)') },
+        { id: 'risk', label: locale.t('curatorView.tabRisk', 'Риск отчисления'), count: riskReport?.at_risk || 0, alert: true },
+      ]" />
 
       <!-- Диалог экспорта: формат (Excel/Word) + выбор групп (галочки = одна/несколько/все) -->
       <div v-dialog v-if="showExport" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -385,16 +370,15 @@ async function exportReport(fmt) {
             </label>
           </div>
 
+          <!-- Excel и Word — равноправные форматы одного отчёта: одна форма кнопки, значок и
+               подпись в строку по центру (находка N14: разъезжались и были разного вида). -->
           <div class="flex flex-wrap gap-2">
-            <button :disabled="exporting || !pickedGroups.length"
-                    class="flex-1 rounded-sm bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-                    @click="exportReport('xlsx')">
-              <GbIcon v-if="!exporting" name="excel" class="size-4 shrink-0" />{{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : locale.t('curatorView.excel', 'Excel') }}
-            </button>
-            <button :disabled="exporting || !pickedGroups.length"
-                    class="flex-1 rounded-sm bg-blue px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-                    @click="exportReport('docx')">
-              <GbIcon v-if="!exporting" name="word" class="size-4 shrink-0" />{{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : locale.t('curatorView.word', 'Word') }}
+            <button v-for="f in [{ fmt: 'xlsx', icon: 'excel', label: locale.t('curatorView.excel', 'Excel') },
+                                 { fmt: 'docx', icon: 'word', label: locale.t('curatorView.word', 'Word') }]"
+                    :key="f.fmt" type="button" :disabled="exporting || !pickedGroups.length"
+                    class="flex min-h-10 flex-1 items-center justify-center gap-2 rounded-sm bg-accent px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                    @click="exportReport(f.fmt)">
+              <GbIcon v-if="!exporting" :name="f.icon" class="size-4 shrink-0" />{{ exporting ? locale.t('curatorView.preparing', 'Готовим…') : f.label }}
             </button>
             <button class="rounded-sm border border-border2 px-4 py-2.5 text-sm text-text2 hover:bg-bg2"
                     @click="showExport = false">{{ locale.t('common.cancel') }}</button>

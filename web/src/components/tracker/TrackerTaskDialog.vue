@@ -27,6 +27,7 @@ import { useTrackerStore } from '@/stores/tracker'
 import { useConfirm } from '@/composables/useConfirm'
 import { PRIORITIES, TASK_KINDS, LINK_KINDS, newId, smallId, checklistProgress, deadlineState } from '@/utils/tracker'
 import { useTrackerLabels, PRIORITY_STYLE, KIND_STYLE, labelColor } from '@/composables/useTrackerLabels'
+import TabBar from '@/components/ui/TabBar.vue'
 
 const tracker = useTrackerStore()
 const L = useTrackerLabels()
@@ -393,15 +394,10 @@ async function removeTask() {
 
           <!-- комментарии и история -->
           <div>
-            <div class="mb-2 flex gap-1 border-b border-border">
-              <button v-for="[key, label, icon] in [['comments', L.t('tracker.comments'), MessageSquare], ['history', L.t('tracker.historyTab'), History]]"
-                      :key="key" type="button" @click="tab = key"
-                      class="-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors"
-                      :class="tab === key ? 'border-accent font-semibold text-accent' : 'border-transparent text-text3 hover:text-text'">
-                <component :is="icon" class="size-4" />{{ label }}
-                <span v-if="key === 'comments' && task.comment_count" class="text-xs">{{ task.comment_count }}</span>
-              </button>
-            </div>
+            <TabBar v-model="tab" class="mb-2" :tabs="[
+              { id: 'comments', label: L.t('tracker.comments'), icon: MessageSquare, count: task.comment_count || 0 },
+              { id: 'history', label: L.t('tracker.historyTab'), icon: History },
+            ]" />
             <p v-if="detailsLoading" class="px-2 py-3 text-sm text-text3">{{ L.t('common.loading') }}</p>
 
             <template v-else-if="tab === 'comments'">

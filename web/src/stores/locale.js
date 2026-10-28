@@ -14,10 +14,23 @@
 // ━━ ВЫКЛЮЧАТЕЛЬ ━━
 // `translateUi=false` возвращает интерфейс к русскому, не стирая выбранный язык: человек
 // может выключить перевод и потом включить обратно, не выбирая язык заново.
+//
+// ━━ СЛОВАРИ ГРУЗЯТСЯ ПО ЯЗЫКУ (28.10.2026) ━━
+// Русский — в основном бандле: он нужен всегда как запасной текст. Английский и китайский —
+// отдельными кусками, только тому, кто их выбрал: раньше все три ехали каждому одним
+// куском в 563 КБ. Пока выбранный словарь грузится, строки берутся из русского; main.js
+// ждёт `ready` перед монтированием, чтобы русский не мелькнул в первом кадре.
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import { LOCALES, DEFAULT_LOCALE, MESSAGES } from '../i18n/dictionaries.js'
+import { ref, computed, shallowReactive } from 'vue'
+import { LOCALES, DEFAULT_LOCALE } from '../i18n/locales.js'
+import ru from '../i18n/ru.js'
 import { pickPlural } from '../utils/plural.js'
+
+const LOADERS = {
+  en: () => import('../i18n/en.js'),
+  zh: () => import('../i18n/zh.js'),
+}
+const KNOWN = new Set(LOCALES.map((l) => l.code))
 
 const LS_LOCALE = 'gb.locale'
 const LS_ENABLED = 'gb.locale_on'
@@ -32,12 +45,24 @@ function read(key, fallback) {
 export const useLocaleStore = defineStore('locale', () => {
   const locale = ref(read(LS_LOCALE, DEFAULT_LOCALE))
   const translateUi = ref(read(LS_ENABLED, '1') !== '0')
+  //Загруженные словари; t() читает отсюда, поэтому догрузка сама перерисует интерфейс.
+  const loaded = shallowReactive({ [DEFAULT_LOCALE]: ru })
 
   // Какой словарь реально применяется. Выключен перевод или неизвестный код — русский.
   const active = computed(() => {
     if (!translateUi.value) return DEFAULT_LOCALE
-    return MESSAGES[locale.value] ? locale.value : DEFAULT_LOCALE
+    return KNOWN.has(locale.value) ? locale.value : DEFAULT_LOCALE
   })
+
+  /** Догрузить словарь языка. Не загрузился (нет сети в браузере) — остаётся русский. */
+  async function ensure(code) {
+    if (loaded[code] || !LOADERS[code]) return
+    try {
+      loaded[code] = (await LOADERS[code]()).default
+    } catch (e) {
+      console.warn(`[locale] словарь ${code} не загрузился — показываю русский`, e)
+    }
+  }
   const current = computed(() =>
     LOCALES.find((l) => l.code === locale.value) || LOCALES[0])
 
@@ -55,8 +80,8 @@ export const useLocaleStore = defineStore('locale', () => {
     const params = paramsOrFallback && typeof paramsOrFallback === 'object'
       ? paramsOrFallback : null
     const fallback = params ? '' : paramsOrFallback
-    const dict = MESSAGES[active.value] || {}
-    let s = dict[key] || MESSAGES[DEFAULT_LOCALE][key] || fallback || key
+    const dict = loaded[active.value] || {}
+    let s = dict[key] || ru[key] || fallback || key
     //Форма слова по числу «{n} подписчик|…|…» — по правилам ТОГО языка, из которого
     //строка взята (нет перевода — русская строка и русские правила).
     if (params && 'n' in params) {
@@ -75,7 +100,7 @@ export const useLocaleStore = defineStore('locale', () => {
   }
 
   function set(code, { push = true } = {}) {
-    if (!MESSAGES[code]) return
+    if (!KNOWN.has(code)) return
     locale.value = code
     translateUi.value = true      //явный выбор языка включает перевод обратно
     try {
@@ -83,6 +108,7 @@ export const useLocaleStore = defineStore('locale', () => {
       localStorage.setItem(LS_ENABLED, '1')
     } catch { /* приватный режим — переживём, останется на эту сессию */ }
     apply()
+    ensure(code)
     if (push) pushToAccount()
   }
 
@@ -90,6 +116,7 @@ export const useLocaleStore = defineStore('locale', () => {
     translateUi.value = !!on
     try { localStorage.setItem(LS_ENABLED, on ? '1' : '0') } catch { /* см. выше */ }
     apply()
+    ensure(active.value)
     pushToAccount()
   }
 
@@ -107,7 +134,7 @@ export const useLocaleStore = defineStore('locale', () => {
       const { meApi } = await import('@/api/endpoints')
       const { data } = await meApi.getPrefs()
       const code = data?.prefs?.locale
-      if (code && MESSAGES[code]) {
+      if (code && KNOWN.has(code)) {
         locale.value = code
         try { localStorage.setItem(LS_LOCALE, code) } catch { /* см. выше */ }
       }
@@ -116,10 +143,12 @@ export const useLocaleStore = defineStore('locale', () => {
         try { localStorage.setItem(LS_ENABLED, data.prefs.locale_on ? '1' : '0') } catch { /* см. выше */ }
       }
       apply()
+      await ensure(active.value)
     } catch { /* нет сети — работаем с локальным выбором */ }
   }
 
   apply()
-  return { locale, translateUi, active, current, locales: LOCALES,
+  const ready = ensure(active.value)
+  return { locale, translateUi, active, current, locales: LOCALES, ready,
            t, set, setTranslateUi, loadFromAccount }
 })

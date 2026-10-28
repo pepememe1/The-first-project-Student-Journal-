@@ -27,6 +27,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import ToggleRow from '@/components/ui/ToggleRow.vue'
 import ThemeCustomizer from '@/pages/admin/ThemePage.vue'
 import LanguagePicker from '@/components/ui/LanguagePicker.vue'
+import FlagIcon from '@/components/ui/FlagIcon.vue'
 import { useLocaleStore } from '@/stores/locale'
 import { catsForRole, RAILLESS_VIEWS } from '@/config/settingsSections'
 import haptics from '@/utils/haptics'
@@ -780,7 +781,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onEsc))
                   :class="l.code === loc.locale && loc.translateUi
                     ? 'border-accent bg-accent-glow text-text' : 'border-border text-text2 hover:border-accent'"
                   @click="loc.set(l.code)">
-            <span class="text-base leading-none">{{ l.flag }}</span>{{ l.name }}
+            <FlagIcon :code="l.code" />{{ l.name }}
           </button>
         </div>
         <LanguagePicker />

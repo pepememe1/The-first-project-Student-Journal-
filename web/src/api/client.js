@@ -19,6 +19,7 @@ import { isCacheable, writeCache, readCache, servingStale } from './offlineCache
 import { noteOffline, noteOnline } from './offlineSession'
 import { getApiBase, isNativeApp } from './server'
 import { isOwnResponse } from './responseOwner'
+import { makeShared } from './sharedRequest'
 import { appTag } from '../utils/appTag'
 
 /**
@@ -128,6 +129,9 @@ export function bumpSessionGeneration() {
 
 /** Только для тестов: текущее поколение. */
 export function _sessionGeneration() { return sessionGen }
+
+/** GET, который одновременные вызовы делят на всех (см. api/sharedRequest.js). */
+export const sharedGet = makeShared((url) => api.get(url), () => sessionGen)
 
 /**
  * Кому принадлежит запрос: логин из `gb.user` в момент ОТПРАВКИ.

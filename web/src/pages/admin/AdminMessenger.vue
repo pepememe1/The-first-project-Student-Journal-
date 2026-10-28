@@ -25,6 +25,7 @@ import { profilePlate } from '@/theme/palette'
 import { formatCollege } from '@/utils/collegeTime'
 import { mediaSrc } from '@/utils/mediaSrc'
 import GbIcon from '@/components/ui/GbIcon.vue'
+import TabBar from '@/components/ui/TabBar.vue'
 
 const BCP47 = { ru: 'ru-RU', en: 'en-US', zh: 'zh-CN' }
 
@@ -461,31 +462,14 @@ function fmt(iso) {
 <template>
   <div>
     <!-- Переключатель вкладок -->
-    <div class="mb-4 flex gap-1 rounded-lg border border-border2 bg-card2 p-1">
-      <button type="button" @click="switchView('reports')"
-              class="flex-1 rounded-md px-3 py-1.5 text-sm font-semibold transition-colors"
-              :class="view === 'reports' ? 'bg-accent text-white' : 'text-text3 hover:text-text'">
-        {{ locale.t('adminMessenger.tabReports', 'Жалобы') }}
-      </button>
-      <button type="button" @click="switchView('profiles')"
-              class="flex-1 rounded-md px-3 py-1.5 text-sm font-semibold transition-colors"
-              :class="view === 'profiles' ? 'bg-accent text-white' : 'text-text3 hover:text-text'">
-        {{ locale.t('adminMessenger.tabProfiles', 'Профили') }}
-      </button>
-      <button type="button" @click="switchView('inbox')"
-              class="flex-1 rounded-md px-3 py-1.5 text-sm font-semibold transition-colors"
-              :class="view === 'inbox' ? 'bg-accent text-white' : 'text-text3 hover:text-text'">
-        {{ locale.t('adminMessenger.tabInbox', 'Обращения') }}
-        <!-- Число новых сообщений в очереди обращений: очередь, по которой надо ходить
-             руками, чтобы узнать, есть ли в ней что-то, перестают просматривать. -->
-        <span v-if="inboxFresh" class="ml-1 rounded-full bg-red px-1.5 text-[11px] text-white">{{ inboxFresh }}</span>
-      </button>
-      <button type="button" @click="switchView('people')"
-              class="flex-1 rounded-md px-3 py-1.5 text-sm font-semibold transition-colors"
-              :class="view === 'people' ? 'bg-accent text-white' : 'text-text3 hover:text-text'">
-        {{ locale.t('adminMessenger.tabPeople', 'Люди') }}
-      </button>
-    </div>
+    <!-- Число новых сообщений в очереди обращений стоит на вкладке: очередь, по которой надо
+         ходить руками, чтобы узнать, есть ли в ней что-то, перестают просматривать. -->
+    <TabBar :model-value="view" class="mb-4" :tabs="[
+      { id: 'reports', label: locale.t('adminMessenger.tabReports', 'Жалобы') },
+      { id: 'profiles', label: locale.t('adminMessenger.tabProfiles', 'Профили') },
+      { id: 'inbox', label: locale.t('adminMessenger.tabInbox', 'Обращения'), count: inboxFresh || 0, alert: true },
+      { id: 'people', label: locale.t('adminMessenger.tabPeople', 'Люди') },
+    ]" @update:model-value="switchView" />
 
     <!-- ── Жалобы (тикеты) ──────────────────────────────────────────────────────────── -->
     <template v-if="view === 'reports'">

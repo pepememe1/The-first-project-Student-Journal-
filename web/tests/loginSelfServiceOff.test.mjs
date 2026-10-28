@@ -60,8 +60,12 @@ test('код НЕ удалён: обе модалки на месте и раб�
   for (const f of ['web/src/components/RegisterDialog.vue', 'web/src/components/RecoverDialog.vue']) {
     assert.ok(existsSync(root + f), `${f} удалён — а его просили оставить`)
   }
-  assert.ok(PAGE.includes("import RegisterDialog from '@/components/RegisterDialog.vue'"))
-  assert.ok(PAGE.includes("import RecoverDialog from '@/components/RecoverDialog.vue'"))
+  //Подключены — статически или ленивым импортом (с 28.10.2026 окна входа грузятся отдельно),
+  //и стоят в разметке страницы.
+  for (const name of ['RegisterDialog', 'RecoverDialog']) {
+    assert.match(PAGE, new RegExp(`import\\('@/components/${name}\\.vue'\\)|import ${name} from '@/components/${name}\\.vue'`))
+    assert.match(PAGE, new RegExp(`<${name}\\b`))
+  }
 })
 
 test('подсказка не отправляет студента к несуществующей кнопке', () => {

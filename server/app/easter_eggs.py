@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+import grading
+
 from .models import EasterEggLog, UserAchievement
 
 _log = logging.getLogger("gradebook.eggs")
@@ -260,10 +262,10 @@ def mark_triggered(egg_id: str, user_id: str, db: Session) -> bool:
     return True
 
 
-#Порог «отличника» для ULTRAKILL. Тот же 4.5, что уже красит продукт в «отличники» у
-#куратора (`curator_report.categorize`) — своего набора порогов не заводим, иначе на
-#одном экране человек отличник, а на другом нет.
-ULTRAKILL_MIN_AVG = 4.5
+#Порог «отличника» для ULTRAKILL — граница пятёрки из `grading.MARK_EDGES`, та же, что у
+#куратора (`curator_report.categorize`): своего числа не заводим, иначе на одном экране
+#человек отличник, а на другом нет (§4.44).
+ULTRAKILL_MIN_AVG = dict(grading.MARK_EDGES)[5]
 
 
 def roll_one_of(egg_ids: list[str], user_id: str, db: Session) -> str | None:

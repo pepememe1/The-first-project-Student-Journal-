@@ -20,6 +20,7 @@
 // лучи прыгают на старте и возвращаются в конце.
 import { computed, onMounted, watch } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
+import { markOfAverage } from '@/utils/grading'
 
 const props = defineProps({
   //Средний балл человека. Пусто/0 — DOOM не показываем: выдумывать состояние не из чего.
@@ -36,10 +37,10 @@ const ledColor = computed(() => (props.average >= 4 ? '#2b8cff'
   : props.average >= 3 ? '#e0a72b' : '#e04b3c'))
 const ledBlink = computed(() => props.average > 0 && props.average < 3)
 
-const doomColor = computed(() => (props.average >= 4.5 ? '#e8b923'
-  : props.average >= 3.5 ? '#4fa87a'
-  : props.average >= 2.5 ? '#b8860b' : '#c0392b'))
-const doomRays = computed(() => doom.value && props.average >= 4.5)
+//Цвета — палитра сцены по мотивам игры, а не темы; границы — grading.MARK_EDGES.
+const DOOM_COLOR = { 5: '#e8b923', 4: '#4fa87a', 3: '#b8860b' }
+const doomColor = computed(() => DOOM_COLOR[markOfAverage(props.average)] || '#c0392b')
+const doomRays = computed(() => doom.value && markOfAverage(props.average) === 5)
 
 // Ачивку закрываем, как только показали: обе сцены живут на аватарке и «доиграть» их
 // нельзя — человек просто уходит с экрана.

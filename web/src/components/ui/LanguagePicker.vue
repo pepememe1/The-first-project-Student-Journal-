@@ -8,6 +8,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { Globe, Check } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
+import FlagIcon from '@/components/ui/FlagIcon.vue'
 
 defineProps({
   // На тёмной картинке экрана входа кнопка должна быть светлой, в кабинете — обычной.
@@ -41,7 +42,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
               : 'border-border bg-card2 text-text2 hover:border-accent'"
             @click="open = !open">
       <Globe class="size-4" />
-      <span class="text-base leading-none">{{ loc.current.flag }}</span>
+      <FlagIcon :code="loc.current.code" />
     </button>
 
     <ul v-back-close="() => (open = false)" v-if="open" role="listbox"
@@ -52,7 +53,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
                 class="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-card2 pointer-coarse:py-3"
                 :class="l.code === loc.locale ? 'text-accent' : 'text-text2'"
                 @click="pick(l.code)">
-          <span class="text-base leading-none">{{ l.flag }}</span>
+          <FlagIcon :code="l.code" />
           <span class="flex-1">{{ l.name }}</span>
           <Check v-if="l.code === loc.locale && loc.translateUi" class="size-4" />
         </button>

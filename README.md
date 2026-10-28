@@ -593,7 +593,8 @@ cd web/android && ./gradlew :app:testDebugUnitTest   # Android, устройст
 | `src/pages/` | Страницы по ролям: `student/`, `teacher/`, `parent/`, `admin/`, плюс расписание, Вектор, мессенджер, настройки |
 | `src/components/` | Маскот, фон-гексагоны, `ui/` (карточки, таблицы, `RiskBadge`, `ZetProgress`), `messenger/` (18 компонентов), `vector/` (сводки по ролям), `journal/` (общий список занятий для студента и родителя), `server/` |
 | `src/config/` | `nav.js`, `mascot.js` (порт `emotes.pick`), `roles.js`, `status.js`, `vectorCommands.js` |
-| `src/i18n/dictionaries.js` | Тексты интерфейса ru/en/zh (парность ключей держит тест) |
+| `src/i18n/ru.js`, `en.js`, `zh.js` | Тексты интерфейса; русский в главном чанке, остальные — по выбору языка (парность ключей держит тест) |
+| `src/i18n/dictionaries.js` | Сборка трёх словарей для тестов и инструментов, интерфейс её не грузит |
 | `src/theme/` | Палитра, токены `--gb-*`, `dataviz.js` (категориальные цвета графиков) |
 | `src/utils/` | `grading.js` (контракт с Python), `markdownLite.js`, `videoEmbed.js`, `gifEmbed.js`, `clipboard.js`, `voiceInput.js`; `backLayers.js` и `backButton.js` (системная «назад» на Android: окно → прошлый экран → свернуть), `clientReport.js` (ошибки и время старта на сервер) |
 | `public/fonts/` | Фирменные шрифты своими файлами (собираются `tools/build_web_fonts.py`) |

@@ -7,18 +7,18 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 //Тихая догрузка остальных страниц СВОЕЙ роли: страницы разрезаны по маршрутам,
 //и без прогрева не посещённая страница не попадёт в офлайн-кэш браузера.
 import { routes as appRoutes } from '@/router'
-import { prefetchRoutes } from '@/utils/routePrefetch'
+import { prefetchRoutes, prefetchLoaders } from '@/utils/routePrefetch'
+import { warmEmojiFont } from '@/utils/fontWarmup'
+import { animLoaders } from '@/config/mascot'
 import { linkStaysOnRoute } from '@/utils/drawerLinks'
 import { useRoute } from 'vue-router'
 import { PanelRightOpen } from '@lucide/vue'
 import Sidebar from '@/components/Sidebar.vue'
 import HeaderBar from '@/components/HeaderBar.vue'
 import BottomNav from '@/components/BottomNav.vue'
-import VectorDock from '@/components/VectorDock.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
-import ActivityLauncher from '@/components/activity/ActivityLauncher.vue'
-import ActivityPortfolio from '@/components/activity/ActivityPortfolio.vue'
 import TimerAlarm from '@/components/activity/timer/TimerAlarm.vue'
+import { lazyComponent, warmAlso, warmLoaders } from '@/utils/lazyComponent'
 import EasterEggHost from '@/components/easter/EasterEggHost.vue'
 import { useEasterStore } from '@/stores/easterEggs'
 import { useAuthStore } from '@/stores/auth'
@@ -34,7 +34,17 @@ import { shellBadgeTickDue } from '@/utils/livePolling'
 import { useLocaleStore } from '@/stores/locale'
 import { useMaintenanceStore } from '@/stores/maintenance'
 import GbIcon from '@/components/ui/GbIcon.vue'
-import AccountOnboardingDialog from '@/components/account/AccountOnboardingDialog.vue'
+
+//Всё, что стоит под v-if и открывается не у каждого, — отдельными чанками: шторка Вектора
+//по умолчанию свёрнута, активности запускают единицы, окно настройки учётки — только
+//студенту. В главном чанке они удлиняли первую загрузку всем.
+const VectorDock = lazyComponent(() => import('@/components/VectorDock.vue'))
+const ActivityLauncher = lazyComponent(() => import('@/components/activity/ActivityLauncher.vue'))
+const ActivityPortfolio = lazyComponent(() => import('@/components/activity/ActivityPortfolio.vue'))
+const AccountOnboardingDialog = lazyComponent(() => import('@/components/account/AccountOnboardingDialog.vue'))
+//Редактор квиза объявлен внутри лаунчера, который сам ленивый: без этой строки он не попал
+//бы в прогрев, и «создать квиз» у того, кто колесо ещё не открывал, без сети не открылся бы.
+warmAlso(() => import('@/components/activity/quiz/QuizEditor.vue'))
 
 const locale = useLocaleStore()
 //Переход «к содержимому»: фокус на <main>, а не только прокрутка — иначе следующий Tab
@@ -230,7 +240,11 @@ onMounted(() => {
   document.addEventListener('focusout', _onFocusOut)
   //Прогрев идёт в простое время и НИЧЕГО не блокирует: экран уже показан. Смысл —
   //офлайн-кэш браузера и мгновенный первый переход по меню (см. utils/routePrefetch.js).
-  prefetchRoutes(appRoutes, auth.role)
+  //Первыми — ленивые части оболочки и шрифт эмодзи (раньше они были в главном чанке и на
+  //входе), потом страницы роли, последними — анимации Вектора по одной: первое открытие
+  //помощника не должно показывать пустое место, пока качается маскот.
+  prefetchRoutes(appRoutes, auth.role, [...warmLoaders(), warmEmojiFont])
+    .then(() => prefetchLoaders(animLoaders('chat')))
   //🔥 ВИДЖЕТ РАСПИСАНИЯ НАПОЛНЯЕМ И ЗДЕСЬ, а не только при вводе пароля (01.09.2026).
   //Обновление жило в `_afterLogin`, то есть срабатывало ТОЛЬКО при свежем входе — а на
   //телефоне сессия живёт семь суток, и всё это время виджет показывал снимок недельной
@@ -421,7 +435,9 @@ onMounted(askLoginEggs)
         <!-- ⚠️ `gb-pages` (position: relative) — система координат для УХОДЯЩЕЙ страницы,
              см. стили внизу файла. Без неё две страницы во время перехода встают друг
              под другом обычным потоком. -->
-        <p v-if="note && !embed" class="mb-2.5 text-xs text-text3">{{ note }}</p>
+        <!-- Пояснение — в тех же полях, что и страница: без них оно висело в самом углу,
+             вплотную к меню (расписание админа, 28.10.2026). -->
+        <p v-if="note && !embed" class="mx-auto max-w-[1700px] px-3 pt-3 text-xs text-text3 sm:px-4 sm:pt-3.5">{{ note }}</p>
         <div class="gb-pages"
              :class="[embed ? 'h-full p-0' : 'mx-auto max-w-[1700px] p-3 sm:px-4 sm:py-3.5',
                       (!embed && showDock && vector.collapsed) ? 'lg:pr-10' : '']">

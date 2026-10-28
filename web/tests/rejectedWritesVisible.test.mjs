@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { allDictText } from './_dict.mjs'
 
 const NL = String.fromCharCode(10)
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
@@ -81,7 +82,7 @@ test('«оставить моё» есть только у конфликта, �
 })
 
 test('все ключи перевода отказов есть во ВСЕХ трёх локалях', () => {
-  const dict = read(join(SRC, 'i18n', 'dictionaries.js'))
+  const dict = allDictText()
   const badge = read(files.find((p) => p.endsWith('RejectedWritesBadge.vue')))
   const keys = [...badge.matchAll(/locale\.t\(\s*'([^']+)'/g)].map((m) => m[1])
     .filter((k) => k.startsWith('rejected.'))

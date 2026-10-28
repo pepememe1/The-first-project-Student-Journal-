@@ -19,10 +19,13 @@ import { ShieldCheck, TriangleAlert } from '@lucide/vue'
 
 import { refresh, start, stop, syncIssues, syncState, verifiedAt } from '@/api/desktopSync'
 import { useLocaleStore } from '@/stores/locale'
-import SyncProblemsPanel from '@/components/ui/SyncProblemsPanel.vue'
 import { collegeHhmm } from '@/utils/collegeTime'
+import { lazyComponent } from '@/utils/lazyComponent'
 
 const locale = useLocaleStore()
+//Панель нужна только программе и только по нажатию; программа берёт чанк у локального
+//сервера, поэтому без сети он доезжает так же, и прогревать его на сайте незачем.
+const SyncProblemsPanel = lazyComponent(() => import('@/components/ui/SyncProblemsPanel.vue'), { warm: false })
 
 const issues = computed(() => syncIssues())
 const visible = computed(() => issues.value.length > 0)

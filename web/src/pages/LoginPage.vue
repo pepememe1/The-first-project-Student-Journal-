@@ -17,7 +17,6 @@ import { loginHints, capsLockState } from '@/utils/loginHints'
 import { isDesktopApp, isAndroidBrowser } from '@/utils/platform'
 import { isHandheld } from '@/utils/device'
 import AppButton from '@/components/ui/AppButton.vue'
-import DeviceApproval from '@/components/DeviceApproval.vue'
 import HexBackground from '@/components/HexBackground.vue'
 import EasterEggHost from '@/components/easter/EasterEggHost.vue'
 import { useEasterStore } from '@/stores/easterEggs'
@@ -25,18 +24,36 @@ import LanguagePicker from '@/components/ui/LanguagePicker.vue'
 import AccessibilityMenu from '@/components/AccessibilityMenu.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 import Mascot from '@/components/Mascot.vue'
-import RegisterDialog from '@/components/RegisterDialog.vue'
-import RecoverDialog from '@/components/RecoverDialog.vue'
-import PasswordRecoveryDialog from '@/components/auth/PasswordRecoveryDialog.vue'
 import { saveCredential } from '@/utils/credentialStore'
 import { getTrustToken } from '@/utils/trustToken'
+import { lazyComponent } from '@/utils/lazyComponent'
+import { prefetchLoaders } from '@/utils/routePrefetch'
+import { warmEmojiFont } from '@/utils/fontWarmup'
+
+//Окна входа, которые видит не каждый (второй фактор, одобрение устройства, регистрация,
+//восстановление), — отдельными чанками: экран входа — первое, что грузит каждый человек.
+//Их прогревает сама страница сразу после отрисовки формы (onMounted ниже), чтобы окно
+//второго фактора не задерживалось после пароля; в прогрев оболочки после входа они не
+//идут (warm: false).
+const COLD = { warm: false }
+const LOGIN_DIALOGS = {
+  device: () => import('@/components/DeviceApproval.vue'),
+  register: () => import('@/components/RegisterDialog.vue'),
+  recover: () => import('@/components/RecoverDialog.vue'),
+  forgot: () => import('@/components/auth/PasswordRecoveryDialog.vue'),
+  mfa: () => import('@/components/auth/MfaPrompt.vue'),
+}
+const DeviceApproval = lazyComponent(LOGIN_DIALOGS.device, COLD)
+const RegisterDialog = lazyComponent(LOGIN_DIALOGS.register, COLD)
+const RecoverDialog = lazyComponent(LOGIN_DIALOGS.recover, COLD)
+const PasswordRecoveryDialog = lazyComponent(LOGIN_DIALOGS.forgot, COLD)
+const MfaPrompt = lazyComponent(LOGIN_DIALOGS.mfa, COLD)
 
 const router = useRouter()
 //Адрес возврата после входа (`?redirect=`): ссылка, присланная не вошедшему, обязана
 //открыться после входа, а не смениться главной роли.
 const route = useRoute()
 const auth = useAuthStore()
-import MfaPrompt from '@/components/auth/MfaPrompt.vue'
 import GbIcon from '@/components/ui/GbIcon.vue'
 const easter = useEasterStore()
 const loc = useLocaleStore()
@@ -70,6 +87,10 @@ const apk = ref({ url: '', version: '' })
 // биометрический аутентификатор (Face ID/отпечаток) и браузер поддерживает passkeys.
 const canBiometric = ref(false)
 onMounted(async () => {
+  //Форма уже на экране — в простое время догружаем окна входа и шрифт эмодзи: до
+  //28.10.2026 они приходили вместе с первой загрузкой, и после входа эмодзи главной
+  //не должны мигнуть системными (utils/fontWarmup.js).
+  prefetchLoaders([...Object.values(LOGIN_DIALOGS), warmEmojiFont])
   // greeting держим ~1.6 с, потом плавный переход в покой (без частого мелькания).
   setTimeout(() => { greetingDone.value = true }, 1600)
   isDesktop.value = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches ?? true

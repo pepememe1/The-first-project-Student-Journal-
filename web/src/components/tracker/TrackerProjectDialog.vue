@@ -10,6 +10,7 @@ import { useTrackerStore } from '@/stores/tracker'
 import { useConfirm } from '@/composables/useConfirm'
 import { COLUMN_KINDS, KEY_RE, defaultColumns, newId, smallId, suggestKey } from '@/utils/tracker'
 import { useTrackerLabels, LABEL_COLORS, labelColor, COLUMN_STYLE } from '@/composables/useTrackerLabels'
+import TabBar from '@/components/ui/TabBar.vue'
 
 const props = defineProps({
   projectId: { type: String, default: '' },      // пусто — создаём новую работу
@@ -189,14 +190,11 @@ async function removeProject() {
 
       <!-- настройка -->
       <template v-else-if="project">
-        <div class="flex shrink-0 gap-1 border-b border-border px-3">
-          <button v-for="[k, label] in [['main', L.t('tracker.tabMain')], ['columns', L.t('tracker.tabColumns')], ['labels', L.t('tracker.tabLabels')]]"
-                  :key="k" type="button" @click="tab = k"
-                  class="-mb-px border-b-2 px-3 py-2 text-sm transition-colors"
-                  :class="tab === k ? 'border-accent font-semibold text-accent' : 'border-transparent text-text3 hover:text-text'">
-            {{ label }}
-          </button>
-        </div>
+        <TabBar v-model="tab" class="shrink-0 px-3" :tabs="[
+          { id: 'main', label: L.t('tracker.tabMain') },
+          { id: 'columns', label: L.t('tracker.tabColumns') },
+          { id: 'labels', label: L.t('tracker.tabLabels') },
+        ]" />
         <div class="min-h-0 flex-1 overflow-y-auto p-4">
           <div v-if="tab === 'main'" class="space-y-3">
             <label class="block">

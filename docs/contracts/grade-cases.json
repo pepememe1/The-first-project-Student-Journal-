@@ -1215,5 +1215,82 @@
       ],
       "expected": 2.67
     }
+  ],
+  "_comment_mark_of_average": "На какую отметку тянет средний: grading.MARK_EDGES / mark_of_average ↔ web/src/utils/grading.js::MARK_EDGES / markOfAverage. 0 — оценок нет. Аудит 28.10.2026: веб держал свою лесенку 4.5/3.5/3 в шести местах, и средний 2.5–2.99 был красным, а сервер считал его тройкой.",
+  "mark_edges": [
+    [
+      5,
+      4.5
+    ],
+    [
+      4,
+      3.5
+    ],
+    [
+      3,
+      2.5
+    ]
+  ],
+  "mark_of_average": [
+    {
+      "_case": "no_grades",
+      "avg": 0,
+      "expected": 0
+    },
+    {
+      "_case": "none_value",
+      "avg": null,
+      "expected": 0
+    },
+    {
+      "_case": "five_edge",
+      "avg": 4.5,
+      "expected": 5
+    },
+    {
+      "_case": "just_below_five",
+      "avg": 4.49,
+      "expected": 4
+    },
+    {
+      "_case": "top",
+      "avg": 5.0,
+      "expected": 5
+    },
+    {
+      "_case": "four_edge",
+      "avg": 3.5,
+      "expected": 4
+    },
+    {
+      "_case": "just_below_four",
+      "avg": 3.49,
+      "expected": 3
+    },
+    {
+      "_case": "three_edge",
+      "avg": 2.5,
+      "expected": 3
+    },
+    {
+      "_case": "between_2_5_and_3_is_three",
+      "avg": 2.75,
+      "expected": 3
+    },
+    {
+      "_case": "just_below_three",
+      "avg": 2.49,
+      "expected": 2
+    },
+    {
+      "_case": "all_twos",
+      "avg": 2.0,
+      "expected": 2
+    },
+    {
+      "_case": "group_average_tie",
+      "avg": 3.62,
+      "expected": 4
+    }
   ]
 }

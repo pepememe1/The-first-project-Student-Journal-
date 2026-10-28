@@ -21,6 +21,16 @@ _TO_FIVE = _CONTRACT["to_five_point"]
 _FAILED_SCALED = _CONTRACT["is_failed_scaled"]
 _PRACTICE_AVG = _CONTRACT["practice_average"]
 _GROUP_AVG = _CONTRACT["group_average"]
+_MARK_AVG = _CONTRACT["mark_of_average"]
+
+
+def test_mark_of_average_matches_contract():
+    #Отметка по среднему — одна лесенка (28.10.2026); JS-зеркало markOfAverage сверяется с тем же файлом.
+    assert [list(e) for e in grading.MARK_EDGES] == _CONTRACT["mark_edges"]
+    for case in _MARK_AVG:
+        got = grading.mark_of_average(case["avg"])
+        assert got == case["expected"], (
+            f"mark_of_average({case['_case']}) = {got}, ожидалось {case['expected']}")
 
 
 def test_group_average_matches_contract():

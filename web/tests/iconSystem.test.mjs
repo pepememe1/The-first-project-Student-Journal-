@@ -29,7 +29,9 @@ const CONTENT_EMOJI = [
 ]
 
 // Эмодзи и символы, которыми рисовали кнопки. ©, ® и ™ — типографика, а не значок.
-const ICONISH = /(?![©®™])[\p{Extended_Pictographic}✕✎]/u
+// Буквы флагов (Regional_Indicator) в Extended_Pictographic не входят, а флаг выбора языка
+// тянул на экран входа весь шрифт Twemoji — флаги рисует components/ui/FlagIcon.vue.
+const ICONISH = /(?![©®™])[\p{Extended_Pictographic}\p{Regional_Indicator}✕✎]/u
 
 function sources(dir = SRC, out = []) {
   for (const name of readdirSync(dir)) {

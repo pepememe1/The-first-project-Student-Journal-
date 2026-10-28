@@ -27,6 +27,7 @@ import { messengerApi } from '@/api/endpoints'
 import { BY_ID, RARITY } from '@/config/achievements'
 import Avatar from '@/components/ui/Avatar.vue'
 import AchievementBadge from '@/components/ui/AchievementBadge.vue'
+import TabBar from '@/components/ui/TabBar.vue'
 
 const props = defineProps({
   userId: { type: String, default: '' },
@@ -92,23 +93,10 @@ const TABS = computed(() => [
     <!-- Категории В РЯД. Счётчик прямо во вкладке: видно, есть ли там что-то, не
          переключаясь туда. Подчёркивание активной, а не заливка — переключатель не
          должен спорить по весу с содержимым под ним. -->
-    <div class="flex shrink-0 items-stretch gap-1 overflow-x-auto border-b border-border px-2 pt-2">
-      <button v-for="t in TABS" :key="t.id" type="button" @click="tab = t.id"
-              :aria-current="tab === t.id" :title="t.full"
-              class="flex flex-1 items-center justify-center gap-1 whitespace-nowrap border-b-2
-                     px-1.5 pb-2 pt-1 text-[12px] transition-colors"
-              :class="tab === t.id
-                ? 'border-accent font-semibold text-text'
-                : 'border-transparent text-text2 hover:text-text'">
-        <component :is="t.icon" class="size-3.5 shrink-0" />
-        <!-- ⚠️ Без truncate и без min-w-0: именно они и обрезали ярлык до многоточия.
-             Ширины теперь хватает, а если вдруг перестанет — пусть лучше вкладки
-             станут прокручиваться (overflow-x на родителе), чем превратятся в «Общ…». -->
-        <span class="shrink-0">{{ t.label }}</span>
-        <span class="shrink-0 rounded px-1 text-[11px] tabular-nums"
-              :class="tab === t.id ? 'bg-accent-glow text-accent' : 'text-text3'">{{ t.n }}</span>
-      </button>
-    </div>
+    <!-- Без обрезки ярлыка до многоточия: не влезут — вкладки прокрутятся (TabBar), а не
+         превратятся в «Общ…». -->
+    <TabBar v-model="tab" class="shrink-0 px-2 pt-2" stretch
+            :tabs="TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon, count: t.n, title: t.full }))" />
 
     <div class="min-h-0 flex-1 overflow-y-auto p-3">
       <!-- Полное название выбранной категории: короткий ярлык во вкладке экономит

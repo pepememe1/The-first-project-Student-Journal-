@@ -2,7 +2,7 @@
 // ChatList — левая колонка навигации (стиль Telegram): поиск по ФИО, вкладки
 // «Чаты / Преподаватели / Студенты / Каналы», кнопка «+» (новая группа/канал). Клик по
 // чату открывает переписку; по человеку — личный чат; по каналу — вступление/открытие.
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
          Search, Plus, Users, Radio, Megaphone, Briefcase, Star, Archive, EllipsisVertical,
@@ -290,7 +290,8 @@ async function onBlock(chat) {
 //человеком. Наблюдение, а не событие, — см. объяснение у `groupDraftPeer` в сторе.
 watch(() => m.groupDraftPeer, (peer) => { if (peer) createKind.value = 'group' })
 
-onMounted(() => { m.loadChats() })
+//Список бесед здесь не загружается: его грузит MessengerPage до открытия беседы по ссылке,
+//и второй вызов из списка удваивал запрос бесед и заявок на каждом входе в раздел.
 </script>
 
 <template>

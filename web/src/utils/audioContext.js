@@ -28,7 +28,6 @@
  */
 
 let ctx = null
-let primed = false
 
 /** Единственный контекст продукта. `null` — Web Audio в этом браузере нет вовсе. */
 export function audioContext() {
@@ -46,12 +45,8 @@ export function audioContext() {
 export function primeAudio() {
   const c = audioContext()
   if (!c) return
-  primed = true
   if (c.state === 'suspended') { try { c.resume() } catch { /* политика браузера */ } }
 }
-
-/** Разбудили ли контекст хоть раз. Нужно тестам и диагностике, не логике звука. */
-export function isPrimed() { return primed }
 
 /**
  * Выполнить `play(ctx, now)` НА РАЗБУЖЕННОМ контексте.

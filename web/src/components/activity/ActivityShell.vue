@@ -10,21 +10,23 @@ import { X, Minus, Maximize2 } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 import { useConfirm } from '@/composables/useConfirm'
 import { useActivityStore } from '@/stores/activity'
-import TimerPanel from './timer/TimerPanel.vue'
-import PollPlayer from './poll/PollPlayer.vue'
-import PulsePlayer from './pulse/PulsePlayer.vue'
-import QuizPlayer from './quiz/QuizPlayer.vue'
-import BoardCanvas from './board/BoardCanvas.vue'
-import ActivityPortfolio from './ActivityPortfolio.vue'
+import { lazyComponent } from '@/utils/lazyComponent'
 
 const locale = useLocaleStore()
 const { confirm } = useConfirm()
 const act = useActivityStore()
 const portfolioOpen = ref(false)
 
+//Плееры — отдельными чанками: оболочка висит на каждой странице, а активность идёт у
+//немногих. Загруженный плеер дальше живёт как обычно (v-show при сворачивании, см. ниже).
+const QuizPlayer = lazyComponent(() => import('./quiz/QuizPlayer.vue'))
+const ActivityPortfolio = lazyComponent(() => import('./ActivityPortfolio.vue'))
 const PLAYERS = {
-  timer: TimerPanel, poll: PollPlayer, pulse: PulsePlayer,
-  quiz: QuizPlayer, contest: QuizPlayer, board: BoardCanvas,
+  timer: lazyComponent(() => import('./timer/TimerPanel.vue')),
+  poll: lazyComponent(() => import('./poll/PollPlayer.vue')),
+  pulse: lazyComponent(() => import('./pulse/PulsePlayer.vue')),
+  quiz: QuizPlayer, contest: QuizPlayer,
+  board: lazyComponent(() => import('./board/BoardCanvas.vue')),
 }
 const player = computed(() => PLAYERS[act.kind] || null)
 const title = computed(() =>

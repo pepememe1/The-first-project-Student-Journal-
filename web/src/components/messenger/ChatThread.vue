@@ -2883,22 +2883,13 @@ function openActivities() {
 }
 .gb-msg-in { animation: gb-msg-in 0.26s cubic-bezier(0.2, 0.7, 0.2, 1); }
 
-/* Скелет — «дышит», а не бежит: бегущий блик по всей ленте притягивает взгляд к
-   заглушке вместо содержимого, ради которого человек и открыл беседу. */
-@keyframes gb-skeleton-pulse {
-  0%, 100% { opacity: 0.45; }
-  50%      { opacity: 0.75; }
-}
-.gb-skeleton {
-  background: var(--gb-card2, rgba(127, 127, 127, 0.18));
-  animation: gb-skeleton-pulse 1.4s ease-in-out infinite;
-}
+/* Скелет ленты — общий класс .gb-skeleton из style.css (28.10.2026 вынесен туда: им же
+   пользуются главная студента и журнал). */
 
 /* Уважение к системной настройке: человеку, который выключил анимации, они выключены
    и здесь. Содержимое при этом остаётся на месте — гасим движение, а не показ. */
 @media (prefers-reduced-motion: reduce) {
   .gb-msg-in { animation: none; }
-  .gb-skeleton { animation: none; }
 }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }

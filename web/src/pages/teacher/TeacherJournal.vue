@@ -27,7 +27,9 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { attemptKey, needsRetake as needsRetakeShared } from '@/utils/grades'   //контракт с Python
 import { BUFFER_TIMEOUT_MS, resolveKey } from '@/utils/gradeKeys'
 import { isHandheld } from '@/utils/device'
-import { practiceAverage, scaleValues, toFivePoint, groupAverage as groupAverageOf } from '@/utils/grading'  //кастомная шкала препода (§ролей, 3.3.1) + офлайн-пересчёт среднего
+import { practiceAverage, scaleValues, toFivePoint, groupAverage as groupAverageOf, markOfAverage } from '@/utils/grading'  //кастомная шкала препода (§ролей, 3.3.1) + офлайн-пересчёт среднего
+import { markTextClass } from '@/utils/markTone'
+import { useDelayedFlag } from '@/composables/useDelayedFlag'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import MicButton from '@/components/vector/MicButton.vue'
@@ -91,6 +93,7 @@ onMounted(async () => {
     group.value = pickRemembered(groups.value, qGroup, last.group)
     subject.value = pickRemembered(subjects.value, qSubject, last.subject)
   } catch { /* */ }
+  workloadReady.value = true
   await loadTerm()
   document.addEventListener('click', closeCtx)
 })
@@ -108,6 +111,13 @@ onBeforeUnmount(() => document.removeEventListener('click', closeCtx))
 // под заголовок новой. Применяется только ответ на последний запрос.
 const shownKey = ref('')
 const journalKey = computed(() => `${group.value}|${subject.value}`)
+//«Журнал ещё не пришёл»: нагрузка не загружена или на экране не та пара. Пока так —
+//скелет таблицы, а не плашки «Нет нагрузки» / «Нет студентов»: до 28.10.2026 они мелькали
+//у каждого преподавателя перед таблицей, пока шёл первый ответ (замер на стенде).
+const workloadReady = ref(false)
+const journalPending = computed(() => !workloadReady.value
+  || (!!group.value && !!subject.value && shownKey.value !== journalKey.value))
+const showJournalSkeleton = useDelayedFlag(journalPending)
 let loadSeq = 0
 async function load() {
   if (!group.value || !subject.value) { data.value = null; shownKey.value = ''; return }
@@ -447,14 +457,8 @@ function gradeClass(v, l) {
   if (raw === '2') return 'text-red font-bold'
   return 'text-text2'
 }
-function avgClass(a) {
-  const n = Number(a) || 0
-  if (n >= 4.5) return 'text-accent'
-  if (n >= 3.5) return 'text-blue'
-  if (n >= 3) return 'text-orange'
-  if (n > 0) return 'text-red'
-  return 'text-text3'
-}
+//Цвет среднего — одна лесенка на интерфейс (utils/markTone.js, границы grading.MARK_EDGES).
+const avgClass = markTextClass
 // Средний группы — `groupAverage` из grading.js, зеркало `grading.group_average` (контракт
 // docs/contracts/grade-cases.json). До 20.10.2026 он считался здесь своей формулой через
 // `toFixed(2)`: 3.625 давало 3.63, а отчёт куратора и выгрузки — 3.62 (инвариант §4.8).
@@ -1186,9 +1190,16 @@ async function downloadVedomost(fmt) {
       <span>{{ locale.t('teacherJournal.unassignedWarning', { n: unassignedCount }) }}</span>
     </div>
 
-    <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherJournal.noWorkloadTitle', 'Нет нагрузки')"
+    <!-- Скелет — только если ответ задержался дольше 150 мс; быстрый ответ показывает
+         таблицу сразу, без мелькания заглушки. -->
+    <div v-if="journalPending" aria-busy="true">
+      <div v-if="showJournalSkeleton" class="rounded-lg border border-border bg-card p-3 shadow-card">
+        <div class="gb-skeleton mb-2 h-9 rounded" />
+        <div v-for="i in 6" :key="i" class="gb-skeleton mb-2 h-8 rounded last:mb-0" />
+      </div>
+    </div>
+    <EmptyState v-else-if="!groups.length || !subjects.length" :title="locale.t('teacherJournal.noWorkloadTitle', 'Нет нагрузки')"
                 :message="locale.t('teacherJournal.noWorkloadMessage', 'За вами не закреплены группы или предметы.')" />
-    <p v-else-if="loading && shownKey !== journalKey" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
     <EmptyState v-else-if="!data?.students?.length" :title="locale.t('teacherJournal.noStudentsTitle', 'Нет студентов')" :message="locale.t('teacherJournal.noStudentsMessage', { group })" />
     <EmptyState v-else-if="!visibleStudents.length" :title="locale.t('teacherJournal.emptySubgroupTitle', 'Подгруппа пуста')"
                 :message="locale.t('teacherJournal.emptySubgroupMessage', 'Куратор ещё не распределил сюда студентов.')" />
@@ -1196,7 +1207,7 @@ async function downloadVedomost(fmt) {
                 :message="locale.t('teacherJournal.emptyJournalMessage', 'Добавьте первое занятие кнопкой «+ Занятие» — колонки появятся здесь.')" />
 
     <!-- Таблица компактная и выровнена влево: обёртка не растягивает table (w-max). -->
-    <StickyXScroll v-else class="rounded-lg border border-border bg-card shadow-card">
+    <StickyXScroll v-else class="gb-reveal rounded-lg border border-border bg-card shadow-card">
       <!-- w-max (без min-w-full): таблица ровно по содержимому и прижата ВЛЕВО, не
            расползается к центру при 1–2 занятиях. -->
       <table class="w-max text-sm">
@@ -1395,7 +1406,7 @@ async function downloadVedomost(fmt) {
                    «дотягивает ли до пятёрки». Держать его на другом экране значит
                    заставить человека помнить число, пока он выбирает оценку. -->
               <span class="shrink-0 text-xs font-semibold"
-                    :class="r.average >= 4.5 ? 'text-green' : r.average >= 3.5 ? 'text-accent' : 'text-text3'">
+                    :class="markOfAverage(r.average) === 5 ? 'text-green' : markOfAverage(r.average) === 4 ? 'text-accent' : 'text-text3'">
                 <!-- 0 — «оценок нет» (practice_average), а не «средний ноль»: в журнале там «—». -->
                 {{ locale.t('teacherJournal.attAvg', 'ср.') }} {{ Number(r.average) > 0 ? Number(r.average).toFixed(2) : '—' }}
               </span>

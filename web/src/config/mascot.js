@@ -52,7 +52,8 @@ const PRELOAD = ['neutral-idle', 'think-think', 'happy-cheer', 'happy-congrats',
 // ⚠️ Та же версия арта, что в Mascot.vue, и по той же причине: файлы в `public/` не
 // получают хеш в имени, поэтому без метки предзагрузка бережно кладёт в кэш СТАРЫЕ файлы.
 // Держать значение синхронным с ART_VERSION в Mascot.vue.
-export const ART_VERSION = 3
+// 4 — 28.10.2026: анимации пересжаты (METHOD 6, minimize_size), тот же кроп и тайминг.
+export const ART_VERSION = 4
 let _preloaded = false
 export function preloadMascots() {
   if (_preloaded || typeof Image === 'undefined' || lowBandwidth()) return
@@ -108,6 +109,20 @@ export function preloadAnims(scope = 'chat') {
   for (const a of ANIM_SCOPES[scope] || []) {
     const img = new Image(); img.src = `/mascot/anim/${a}.webp?v=${ART_VERSION}`
   }
+}
+
+// Те же файлы, но по одному: для очереди прогрева оболочки (utils/routePrefetch.js) после
+// страниц роли, чтобы первое открытие Вектора не показывало пустое место, пока качается
+// анимация (28.10.2026). Параллельная пачка в 2.3 МБ отобрала бы канал у того, что человек
+// открыл в эту секунду. Сбой загрузки — не событие: кадр догрузится при показе, как раньше.
+export function animLoaders(scope = 'chat') {
+  if (typeof Image === 'undefined' || _animsDone.has(scope) || lowBandwidth()) return []
+  _animsDone.add(scope)
+  return (ANIM_SCOPES[scope] || []).map((a) => () => new Promise((resolve) => {
+    const img = new Image()
+    img.onload = img.onerror = () => resolve()
+    img.src = `/mascot/anim/${a}.webp?v=${ART_VERSION}`
+  }))
 }
 
 /** Спрайт для чата «Вектора» по состоянию/настроению/НАМЕРЕНИЮ — из 30 эмоций.

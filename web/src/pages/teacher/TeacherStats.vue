@@ -7,7 +7,9 @@ import StatCard from '@/components/ui/StatCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import InsightCards from '@/components/InsightCards.vue'
 import Mascot from '@/components/Mascot.vue'
-import { dashboardEmote } from '@/config/mascot'
+import PageReveal from '@/components/ui/PageReveal.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
+import { dashboardEmote, preloadMascots } from '@/config/mascot'
 import { TrendingUp, Users, BookOpen } from '@lucide/vue'
 import { useLocaleStore } from '@/stores/locale'
 
@@ -28,22 +30,37 @@ const insights = ref([])
 const subjects = computed(() =>
   [...new Set(assignments.value.filter((a) => a.group === group.value).map((a) => a.subject))].sort())
 
+//workloadReady — нагрузка пришла (до этого «Нет нагрузки» не показываем: мелькала у
+//каждого); ready — первые данные показаны. Скелет — только до первого показа: при смене
+//группы прежние цифры стоят на месте, пока не придут новые, а не исчезают (28.10.2026).
+const workloadReady = ref(false)
+const ready = ref(false)
 onMounted(async () => {
+  preloadMascots()
   try {
     const o = (await teacherApi.overview()).data
     groups.value = o.groups || []
     assignments.value = o.assignments || []
     group.value = groups.value[0] || ''
   } catch { /* */ }
+  workloadReady.value = true
+  if (!group.value || !subjects.value.length) ready.value = true
 })
 // Сменили группу — предмет мог стать для неё недействительным; берём первый доступный.
 watch(subjects, (list) => {
   if (!list.includes(subject.value)) subject.value = list[0] || ''
 }, { immediate: true })
+//Статистика и советы — одним пакетом: советы раньше приходили вторым запросом и вставали
+//под уже показанными карточками. Применяется только ответ на последний выбор.
+let loadSeq = 0
 async function load() {
   if (!group.value || !subject.value) return
-  try { data.value = (await teacherApi.stats(group.value, subject.value)).data } catch { data.value = null }
-  try { insights.value = (await teacherApi.insights(group.value)).data.cards || [] } catch { insights.value = [] }
+  const seq = ++loadSeq
+  const [s, i] = await Promise.allSettled([teacherApi.stats(group.value, subject.value), teacherApi.insights(group.value)])
+  if (seq !== loadSeq) return
+  data.value = s.status === 'fulfilled' ? s.value.data : null
+  insights.value = i.status === 'fulfilled' ? (i.value.data.cards || []) : []
+  ready.value = true
 }
 watch([group, subject], load)
 
@@ -62,8 +79,14 @@ const sprite = computed(() => dashboardEmote({ average: Number(data.value?.group
         <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
       </select>
     </div>
-    <EmptyState v-if="!groups.length || !subjects.length" :title="locale.t('teacherStats.noWorkload', 'Нет нагрузки')" />
-    <template v-else>
+    <EmptyState v-if="workloadReady && (!groups.length || !subjects.length)" :title="locale.t('teacherStats.noWorkload', 'Нет нагрузки')" />
+    <PageReveal v-else :loading="!ready">
+      <template #skeleton>
+        <div class="space-y-4">
+          <Skeleton kind="stats" :count="3" />
+          <Skeleton kind="card" :count="4" />
+        </div>
+      </template>
       <!-- grid-cols-1 до lg: неявная дорожка `auto` растянулась бы под самое длинное
            название предмета и утащила бы за край экрана всю страницу -->
       <div class="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
@@ -80,6 +103,6 @@ const sprite = computed(() => dashboardEmote({ average: Number(data.value?.group
           <Mascot :sprite="sprite" class="h-60 w-48" />
         </div>
       </div>
-    </template>
+    </PageReveal>
   </div>
 </template>

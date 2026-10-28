@@ -28,6 +28,13 @@ const error = ref('')
 const isOpen = (id) => !!unlocked.value[id]
 const openedCount = computed(() => Object.keys(unlocked.value).length)
 const mine = computed(() => ACHIEVEMENTS.filter((a) => isOpen(a.id)))
+//Открытые — наверху, свежие первыми: в порядке каталога свои терялись среди десятков
+//закрытых, и до последней полученной приходилось листать (находка N13, 28.10.2026).
+const ordered = computed(() => {
+  const at = (a) => String(unlocked.value[a.id]?.unlocked_at || '')
+  const open = mine.value.slice().sort((x, y) => at(y).localeCompare(at(x)))
+  return [...open, ...ACHIEVEMENTS.filter((a) => !isOpen(a.id))]
+})
 
 async function load() {
   try {
@@ -100,18 +107,20 @@ function fmt(iso) {
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
         <!-- ВСЕ: закрытые — чёрные, без названия и описания -->
         <div v-if="mode === 'all'" class="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          <div v-for="a in ACHIEVEMENTS" :key="a.id"
+          <div v-for="a in ordered" :key="a.id"
                class="flex items-start gap-3 rounded-lg border p-3"
                :class="isOpen(a.id)
                  ? 'border-border2 bg-card2'
                  : 'border-border2 bg-[#05070a] text-text3'">
             <AchievementBadge v-if="isOpen(a.id)" :icon="a.icon" :rarity="a.rarity" :size="40" />
-            <span v-else class="grid size-10 shrink-0 place-items-center rounded-lg bg-black/60">
-              <Lock class="size-4 text-text3/50" />
+            <!-- Карточка закрытой — чёрная в любой теме, поэтому и подписи на ней светлые:
+                 прежние text3/60 давали контраст 1,5:1, «???» было не прочитать. -->
+            <span v-else class="grid size-10 shrink-0 place-items-center rounded-lg bg-white/10">
+              <Lock class="size-4 text-white/70" />
             </span>
             <div class="min-w-0">
               <p class="truncate text-sm font-semibold"
-                 :class="isOpen(a.id) ? 'text-text' : 'text-text3/60'">
+                 :class="isOpen(a.id) ? 'text-text' : 'text-white/75'">
                 {{ isOpen(a.id) ? a.title : '???' }}
               </p>
               <p v-if="isOpen(a.id)" class="mt-0.5 text-xs leading-snug text-text2">{{ a.desc }}</p>

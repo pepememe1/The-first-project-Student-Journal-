@@ -21,6 +21,7 @@ import {
 import { deadlineState, timeline } from '../src/utils/tracker.js'
 import { freshness } from '../src/utils/freshness.js'
 import { lessonDateIssue } from '../src/utils/lessonChecks.js'
+import { DICT_FILES } from './_dict.mjs'
 
 test('смещение совпадает с серверным college_clock.py', () => {
   const py = readFileSync(new URL('../../college_clock.py', import.meta.url), 'utf8')
@@ -120,7 +121,7 @@ test('нигде, кроме collegeTime и исключений, нет час�
   const found = []
   for (const file of walk(src)) {
     const rel = file.slice(src.length).replace(/\\/g, '/')
-    if (rel === 'utils/collegeTime.js' || rel === 'i18n/dictionaries.js' || ALLOWED[rel]) continue
+    if (rel === 'utils/collegeTime.js' || DICT_FILES.includes(rel) || ALLOWED[rel]) continue
     for (const [n, line] of deviceClockLines(readFileSync(file, 'utf8'))) found.push(`${rel}:${n}: ${line.trim()}`)
   }
   assert.deepEqual(found, [], 'Часы УСТРОЙСТВА вместо часов колледжа — возьми utils/collegeTime.js:\n' + found.join('\n'))

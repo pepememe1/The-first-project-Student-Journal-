@@ -23,7 +23,7 @@
  * Всё это включается ТОЛЬКО в приложении. На сайте окна нет: там вкладка и так живёт
  * ровно пока открыта, а «оффлайн-браузер» не наш сценарий.
  */
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 
 // Расширения «.js» — чтобы модуль грузился и голым `node --test` (см. outbox.test.mjs).
 import { clearCache } from './offlineCache.js'
@@ -47,12 +47,6 @@ export const lastOnlineAt = ref(Number(localStorage.getItem(LS_LAST_ONLINE) || 0
 
 /** Разрешённое окно офлайна в минутах (сервер может переопределить). */
 export const graceMin = ref(Number(localStorage.getItem(LS_GRACE) || DEFAULT_GRACE_MIN))
-
-/** Сколько минут офлайна осталось. Отрицательное — окно вышло. */
-export const offlineLeftMin = computed(() => {
-  if (!lastOnlineAt.value) return graceMin.value
-  return graceMin.value - (Date.now() - lastOnlineAt.value) / 60000
-})
 
 let expiredHandler = null
 /** Что делать, когда окно вышло (App вешает сюда переход на экран входа). */
@@ -113,10 +107,6 @@ export function startOfflineWatch() {
   if (timer || !isNativeApp()) return
   timer = setInterval(enforceOfflineWindow, 60000)
   enforceOfflineWindow()
-}
-
-export function stopOfflineWatch() {
-  if (timer) { clearInterval(timer); timer = null }
 }
 
 /** Полный сброс при выходе — чтобы у следующего вошедшего окно считалось с нуля. */

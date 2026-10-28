@@ -16,6 +16,7 @@
 // работать — на это уже наступали на стенде.
 import { onBeforeUnmount, watch, ref, computed, nextTick } from 'vue'
 import { useEasterStore } from '@/stores/easterEggs'
+import { markOfAverage } from '@/utils/grading'
 
 const props = defineProps({
   // Средний балл — им выбирается пул реплик Disco Elysium. Ноль означает «оценок нет»:
@@ -110,7 +111,8 @@ const voiceIn = ref(false)
  */
 function speak() {
   const avg = props.average
-  const level = avg >= 4.5 ? 3 : avg >= 3.5 ? 2 : avg >= 2.5 ? 1 : 0
+  //5 → 3, 4 → 2, 3 → 1, двойка и «нет оценок» → 0; границы — grading.MARK_EDGES.
+  const level = Math.max(0, markOfAverage(avg) - 2)
   const [skill, line] = pick(DISCO[level])
   voice.value = { skill, line }
   nextTick(() => { voiceIn.value = true })

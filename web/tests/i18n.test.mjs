@@ -10,17 +10,15 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { LANGS, dictKeys, dictText, localesText } from './_dict.mjs'
 
 const SRC = new URL('../src/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 
 function readDict() {
-  const text = readFileSync(join(SRC, 'i18n/dictionaries.js'), 'utf8')
   const out = {}
-  for (const lang of ['ru', 'en', 'zh']) {
-    const start = text.indexOf(`\n  ${lang}: {`)
-    assert.ok(start > 0, `в словаре нет языка ${lang}`)
-    const body = text.slice(start, text.indexOf('\n  },', start))
-    out[lang] = new Set([...body.matchAll(/'([\w.]+)':/g)].map((m) => m[1]))
+  for (const lang of LANGS) {
+    out[lang] = dictKeys(lang)
+    assert.ok(out[lang].size > 1000, `в словаре ${lang} почти нет ключей — разбор ослеп`)
   }
   return out
 }
@@ -64,10 +62,8 @@ test('каждый ключ из разметки есть в словаре', (
 test('в английском и китайском не осталось кириллицы', () => {
   // Самая частая ошибка при пополнении словаря — скопировать русскую строку в чужой
   // блок и забыть перевести. На экране это неотличимо от «перевод не применился».
-  const text = readFileSync(join(SRC, 'i18n/dictionaries.js'), 'utf8')
   for (const lang of ['en', 'zh']) {
-    const start = text.indexOf(`\n  ${lang}: {`)
-    const body = text.slice(start, text.indexOf('\n  },', start))
+    const body = dictText(lang)
     for (const [, key, value] of body.matchAll(/'([\w.]+)':\s*'([^']*)'/g)) {
       assert.ok(!/[а-яёА-ЯЁ]/.test(value),
         `${lang}.${key} осталось на русском: «${value}»`)
@@ -88,10 +84,26 @@ test('пункты меню переводимы или честно остаю�
 test('коды языков совпадают с теми, что принимает сервер', () => {
   // Сервер чистит prefs.locale по своему списку. Разъедутся — выбранный язык молча
   // не сохранится, и человек будет выставлять его при каждом входе.
-  const text = readFileSync(join(SRC, 'i18n/dictionaries.js'), 'utf8')
+  const text = localesText()
   const codes = [...text.matchAll(/code:\s*'(\w+)'/g)].map((m) => m[1]).sort()
   const me = readFileSync(join(SRC, '../../server/app/routers/me.py'), 'utf8')
   const server = [...me.match(/_UI_LOCALES = \(([^)]*)\)/)[1].matchAll(/"(\w+)"/g)]
     .map((m) => m[1]).sort()
   assert.deepEqual(codes, server, 'списки языков клиента и сервера разошлись')
+})
+
+test('приложение не тянет все языки одним куском', () => {
+  // dictionaries.js собирает три словаря вместе для тестов и инструментов. Импорт его (или
+  // en.js/zh.js статически) из кода приложения снова положил бы все языки в один кусок —
+  // каждому по 563 КБ, из которых он читает треть (28.10.2026).
+  const bad = []
+  for (const file of walk(SRC)) {
+    if (file.replace(/\\/g, '/').includes('/i18n/')) continue
+    const text = readFileSync(file, 'utf8')
+    if (/from\s+['"][^'"]*i18n\/dictionaries(\.js)?['"]/.test(text)) bad.push(file)
+    if (/from\s+['"][^'"]*i18n\/(en|zh)(\.js)?['"]/.test(text)) bad.push(file)
+  }
+  assert.deepEqual(bad, [], 'статический импорт всех языков из кода приложения')
+  const store = readFileSync(join(SRC, 'stores/locale.js'), 'utf8')
+  assert.match(store, /import\('\.\.\/i18n\/en\.js'\)/, 'английский больше не грузится по требованию')
 })

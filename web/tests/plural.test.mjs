@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { pickPlural } from '../src/utils/plural.js'
+import { dictText } from './_dict.mjs'
 
 const RU = '{n} подписчик|{n} подписчика|{n} подписчиков'
 
@@ -33,7 +34,7 @@ test('перевод подставляет форму по числу (пров
 })
 
 test('счётчики подписчиков и участников заданы формами', () => {
-  const dict = readFileSync(new URL('../src/i18n/dictionaries.js', import.meta.url), 'utf8')
+  const dict = dictText('ru')
   for (const key of ['messenger.subscribersCount', 'conversationInfo.subscribersCount',
                      'conversationInfo.membersCount']) {
     const ru = dict.match(new RegExp(`'${key.replace('.', '\\.')}': '([^']*)'`))

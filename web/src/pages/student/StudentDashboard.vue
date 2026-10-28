@@ -5,14 +5,15 @@
 // карточки статистики, проактивные инсайты и список предметов.
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { RotateCw } from '@lucide/vue'
-import { studentApi } from '@/api/endpoints'
+import { studentApi, consentApi } from '@/api/endpoints'
 import StatCard from '@/components/ui/StatCard.vue'
 import ZetProgress from '@/components/ui/ZetProgress.vue'
 import Mascot from '@/components/Mascot.vue'
 import InsightCards from '@/components/InsightCards.vue'
 import ParentConsent from '@/components/ParentConsent.vue'
-import { dashboardEmote } from '@/config/mascot'
+import { dashboardEmote, preloadMascots } from '@/config/mascot'
 import { useLocaleStore } from '@/stores/locale'
+import { useDelayedFlag } from '@/composables/useDelayedFlag'
 import GbIcon from '@/components/ui/GbIcon.vue'
 
 const locale = useLocaleStore()
@@ -21,14 +22,31 @@ const loading = ref(true)
 const data = ref(null)
 const insights = ref([])
 const zet = ref(null)   // docs/done/PLAN-ZET.md — null/subjects:[] → строка ЗЕТ не рендерится
+const consentLinks = ref(null)
 
+//Три ответа — разом и показ одним кадром (28.10.2026). Раньше они шли друг за другом и
+//рисовались по мере прихода: советы вставали над уже показанными карточками, ЗЕТ — между
+//ними, и страница прыгала (замер на стенде: сдвиг макета 0.03, список на 200 мс позже).
+//Сбой второстепенного ответа не держит страницу: его блок просто не появится.
 async function load() {
   loading.value = true
-  try { data.value = (await studentApi.overview()).data } catch { data.value = null } finally { loading.value = false }
-  try { insights.value = (await studentApi.insights()).data.cards || [] } catch { insights.value = [] }
-  try { zet.value = (await studentApi.zet()).data } catch { zet.value = null }
+  const [o, i, z, c] = await Promise.allSettled([
+    studentApi.overview(), studentApi.insights(), studentApi.zet(), consentApi.links(),
+  ])
+  data.value = o.status === 'fulfilled' ? o.value.data : null
+  insights.value = i.status === 'fulfilled' ? (i.value.data.cards || []) : []
+  zet.value = z.status === 'fulfilled' ? z.value.data : null
+  //Сбой заявок — null: тогда ParentConsent попробует загрузить их сам, как раньше.
+  consentLinks.value = c.status === 'fulfilled' ? (c.value.data.links || []) : null
+  loading.value = false
 }
-onMounted(load)
+//Скелет — только если ответ задержался: быстрый ответ показывает страницу сразу готовой.
+const showSkeleton = useDelayedFlag(loading)
+onMounted(() => {
+  //Позы маскота — параллельно с данными: к показу нужная уже в кэше, без подмены картинки.
+  preloadMascots()
+  load()
+})
 
 const avg = computed(() => Number(data.value?.average ?? 0))
 const debts = computed(() => Number(data.value?.debts ?? 0))
@@ -103,7 +121,36 @@ onBeforeUnmount(() => clearInterval(tipTimer))
 </script>
 
 <template>
-  <div class="space-y-3 sm:space-y-5">
+  <!-- Один корень: переход страниц в AppShell работает только с ним (pageSingleRoot.test). -->
+  <div>
+  <!-- Скелет той же раскладки — только если ответ задержался дольше 150 мс; иначе пусто
+       эти доли секунды, и страница проявляется сразу готовой (см. load()). -->
+  <div v-if="loading && showSkeleton" class="space-y-3 sm:space-y-5" aria-busy="true">
+    <div class="flex items-center gap-3">
+      <div class="gb-skeleton aspect-[3/4] w-14 shrink-0 rounded-lg lg:hidden" />
+      <div class="min-w-0 flex-1 space-y-2">
+        <div class="gb-skeleton h-6 w-56 max-w-full rounded" />
+        <div class="gb-skeleton h-4 w-40 max-w-full rounded" />
+      </div>
+    </div>
+    <div class="h-px bg-border" />
+    <div class="gb-skeleton h-24 rounded-lg" />
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(190px,240px)_1fr] xl:grid-cols-[minmax(300px,380px)_1fr]">
+      <div class="hidden justify-center lg:flex">
+        <div class="gb-skeleton aspect-[3/4] w-full max-w-[190px] rounded-2xl lg:max-w-[320px] xl:max-w-[380px]" />
+      </div>
+      <div class="flex min-w-0 flex-col gap-4 sm:gap-5">
+        <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <div v-for="i in 4" :key="i" class="gb-skeleton h-[84px] rounded-lg sm:h-[104px]" />
+        </div>
+        <div class="space-y-1.5 sm:space-y-2">
+          <div class="gb-skeleton mb-3 h-6 w-40 rounded" />
+          <div v-for="i in 5" :key="i" class="gb-skeleton h-11 rounded-md sm:h-12" />
+        </div>
+      </div>
+    </div>
+  </div>
+  <div v-else-if="!loading" class="gb-reveal space-y-3 sm:space-y-5">
     <!-- ⚠️ На ТЕЛЕФОНЕ маскот стоит МЕЛКИМ в одной строке с именем, а не отдельным
          блоком: в прежней раскладке (общая сетка, где на узком экране колонки просто
          становятся строками) тигр занимал 250 px прямо под шапкой, и до собственно
@@ -168,8 +215,9 @@ onBeforeUnmount(() => clearInterval(tipTimer))
            содержимого, и без этого он не даёт колонке сжаться даже при `minmax(0,1fr)` -->
       <div class="flex min-w-0 flex-col gap-4 sm:gap-5">
         <!-- Заявки родителей на доступ к журналу. Стоит ВЫШЕ статистики намеренно: это
-             решение о собственных персональных данных, и его нельзя прятать в подвал. -->
-        <ParentConsent />
+             решение о собственных персональных данных, и его нельзя прятать в подвал.
+             Заявки грузит load() вместе с остальным — блок появляется в том же кадре. -->
+        <ParentConsent :initial="consentLinks" />
         <InsightCards :cards="insights" />
         <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <StatCard :label="locale.t('studentDashboard.subjectsCount', 'Предметов')" :value="data?.subjects_count ?? '—'" accent />
@@ -191,8 +239,7 @@ onBeforeUnmount(() => clearInterval(tipTimer))
 
         <div>
           <h3 class="mb-2 font-title text-base font-bold text-text sm:mb-3 sm:text-lg">{{ locale.t('studentDashboard.mySubjectsTitle', 'Мои предметы') }}</h3>
-          <p v-if="loading" class="text-sm text-text3">{{ locale.t('common.loading') }}</p>
-          <p v-else-if="!data?.subjects?.length" class="text-sm text-text3">{{ locale.t('studentDashboard.noSubjects', 'Предметов пока нет.') }}</p>
+          <p v-if="!data?.subjects?.length" class="text-sm text-text3">{{ locale.t('studentDashboard.noSubjects', 'Предметов пока нет.') }}</p>
           <ul v-else class="space-y-1.5 sm:space-y-2">
             <li v-for="s in data.subjects" :key="s.subject"
                 class="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5 shadow-card sm:px-4 sm:py-3">
@@ -203,5 +250,6 @@ onBeforeUnmount(() => clearInterval(tipTimer))
         </div>
       </div>
     </div>
+  </div>
   </div>
 </template>
