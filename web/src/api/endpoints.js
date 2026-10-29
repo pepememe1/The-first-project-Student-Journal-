@@ -414,6 +414,7 @@ export const adminApi = {
   serverMetrics: () => api.get('/web/admin/server/metrics'),
   serverBackups: () => api.get('/web/admin/server/backups'),
   serverTree: (path = '') => api.get('/web/admin/server/tree', { params: { path } }),
+  serverJobs: () => api.get('/web/admin/server/jobs'),
   // Порог ЗЕТ для перевода группы на курс (docs/done/PLAN-ZET.md §7.2). min_zet: null — снять.
   zetThreshold: (group, params = {}) =>
     api.get('/web/admin/zet-thresholds', { params: { group, ...params } }),

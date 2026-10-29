@@ -18,7 +18,7 @@
 import { ref, computed, onMounted } from 'vue'
 import {
   Server, HardDrive, Cpu, Database, Plus, Trash2, RotateCw, KeyRound, Terminal, ArrowRightLeft,
-  Folder, FileText, ChevronUp, Archive, TriangleAlert,
+  Folder, FileText, ChevronUp, Archive, TriangleAlert, CalendarClock,
 } from '@lucide/vue'
 import { adminApi, deskServerApi } from '@/api/endpoints'
 import Card from '@/components/ui/Card.vue'
@@ -31,9 +31,12 @@ import MigrationWizard from '@/components/server/MigrationWizard.vue'
 import ServerBackups from '@/components/server/ServerBackups.vue'
 import ServiceControls from '@/components/server/ServiceControls.vue'
 import MaintenanceSwitch from '@/components/server/MaintenanceSwitch.vue'
+import ServerJobs from '@/components/server/ServerJobs.vue'
 import { useLocaleStore } from '@/stores/locale'
 
 const locale = useLocaleStore()
+// Вкладки просмотра: состояние машины и её автоматика (`ServerJobs`).
+const viewTab = ref('state')
 
 // ── Просмотр (везде; в программе идёт на боевой сервер через пересылку) ──────────
 const info = ref(null)
@@ -395,6 +398,14 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
     <p v-else-if="error" class="text-sm text-red">{{ error }}</p>
 
     <template v-else>
+      <TabBar v-model="viewTab" :tabs="[
+        { id: 'state', label: locale.t('adminServer.tabOverview', 'Состояние'), icon: HardDrive },
+        { id: 'jobs', label: locale.t('adminServer.tabJobs', 'Автоматика'), icon: CalendarClock },
+      ]" />
+
+      <ServerJobs v-if="viewTab === 'jobs'" />
+
+      <template v-else>
       <Card v-if="info" pad>
         <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div>
@@ -574,6 +585,7 @@ const pickedServer = computed(() => servers.value.find((s) => s.id === picked.va
       <p v-if="!desk" class="px-1 text-xs text-text3">
         {{ locale.t('adminServer.desktopOnlyNotice', 'Создание копий, перезапуск служб и команды доступны только в программе на компьютере. В браузере этих возможностей нет намеренно: доступ к боевому серверу не должен зависеть от того, что кто-то забыл выйти из веб-админки.') }}
       </p>
+      </template>
     </template>
   </div>
 </template>

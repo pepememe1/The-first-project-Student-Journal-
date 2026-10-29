@@ -430,6 +430,14 @@ def alerts(d: dict) -> list:
             elif v.get("fixed") and v["package"] not in (sec.get("hold") or []):
                 out.append("Дыра %s в %s %s: исправление %s есть, но не встало само"
                            % (v["id"], v["package"], v["version"], v["fixed"]))
+        #Дыра ОС или Caddy из списка CISA, которая задевает нашу машину (вердикт сторожа).
+        #Пакеты Python уже названы строкой выше — по открытым дырам venv.
+        from . import vuln_watch
+        for v in sec.get("kev_week") or []:
+            python = any(p in v.get("product", "").lower() for p in vuln_watch.PYPI_STACK)
+            if v.get("ours") and v.get("verdict") in ("exposed", "nofix") and not python:
+                out.append("🔴 %s %s — уже используют в атаках (CISA KEV), %s"
+                           % (v["product"], v["cve"], vuln_watch.verdict_line(v)))
         #Тревога — только если ПОСЛЕДНЯЯ попытка своего вида не прошла: сбой, за которым
         #уже прошла удачная, исправлен, а «требует внимания» на него учило бы не верить теме.
         last: dict = {}

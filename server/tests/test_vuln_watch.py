@@ -1,6 +1,10 @@
 """Сторож уязвимостей: выбор исправления, откат при сбое, строки ночного отчёта.
 
 Сеть и systemd подменены: проверяем решения сторожа, а не OSV и не машину."""
+import json
+import re
+import time
+
 from app import nightly_report, vuln_watch
 
 VULN = {"id": "PYSEC-1", "aliases": ["CVE-2026-1"], "summary": "дыра",
@@ -151,20 +155,191 @@ def test_world_exploits_of_the_week_put_our_stack_first():
     assert not vuln_watch.in_stack({"vendorProject": "Microsoft", "product": "Exchange"})
 
 
-def test_one_letter_per_new_exploit_of_our_stack():
+def test_a_letter_only_for_a_hole_that_hits_us_and_again_when_its_state_changes():
     sent = []
+
+    def alarm(*a, **k):
+        sent.append(k["key"])
     recent = vuln_watch.kev_recent(_FEED, _NOW)
-    done = vuln_watch.alarm_new_kev(recent, [], lambda *a, **k: sent.append(k["key"]))
-    assert sent == ["kev:CVE-2026-1"] and done == ["CVE-2026-1"]
-    vuln_watch.alarm_new_kev(recent, done, lambda *a, **k: sent.append(k["key"]))
-    assert sent == ["kev:CVE-2026-1"]
+    recent[0].update(verdict="safe", why=["openssh 1:9.6p1-3ubuntu13.20, исправлено в 1:9.6p1-3ubuntu13.5"])
+    done = vuln_watch.alarm_new_kev(recent, [], alarm)
+    assert sent == [], "закрытая у нас дыра не повод для письма сразу"
+    #Обратный ход: та же дыра, но исправления нет — письмо; повтор того же вердикта — нет.
+    recent[0]["verdict"] = "nofix"
+    done = vuln_watch.alarm_new_kev(recent, done, alarm)
+    done = vuln_watch.alarm_new_kev(recent, done, alarm)
+    assert sent == ["kev:CVE-2026-1:nofix"]
+    recent[0]["verdict"] = "reboot"
+    vuln_watch.alarm_new_kev(recent, done, alarm)
+    assert sent[-1] == "kev:CVE-2026-1:reboot"
+    #Без вердикта (проверка не дошла) — «не удалось», а это письмо.
+    assert vuln_watch.alarm_new_kev([dict(recent[0], verdict=None)], [], alarm) \
+        == ["CVE-2026-1:unknown"]
 
 
 def test_the_letter_counts_checked_packages_and_world_exploits():
     from app import report_mail
+    week = vuln_watch.kev_recent(_FEED, _NOW)
+    week[0].update(verdict="safe", why=["openssh 1:9.6p1-3ubuntu13.20, исправлено в 1:9.6p1-3ubuntu13.5"])
     sec = {"known": True, "open": [], "actions": [], "checked_python": 87, "kev_total": 1500,
-           "kev_week": vuln_watch.kev_recent(_FEED, _NOW)}
+           "kev_week": week}
     block = report_mail._security_block(sec)
-    assert "проверено 87" in block and "наш стек: 1" in block and "OpenSSH RCE" in block
+    assert "проверено 87" in block and "наш стек: 1" in block and "задевает: 0" in block
+    assert "CVE-2026-1" in block and "нас не задевает" in block and "13.5" in block
     text = report_mail.render_text({"now": _NOW, "security": sec})
-    assert "проверено: 87" in text and "наш стек: 1" in text
+    assert "проверено: 87" in text and "наш стек: 1" in text and "нас не задевает" in text
+
+
+#Ключ сравнения для тестов: числа по порядку. Настоящий сторож спрашивает dpkg.
+def _lt(a, b):
+    def key(s):
+        return [int(x) for x in re.findall(r"\d+", s)]
+    return key(a) < key(b)
+
+
+_INV = {"release": "24.04",
+        "sources": {"linux": ["6.8.0-147.147", "6.8.0-85.85"], "linux-meta": ["6.8.0-147.147"],
+                    "openssl": ["3.0.13-0ubuntu3.16"], "caddy": ["2.11.7"]},
+        "kernel_sources": ["linux"],
+        "kernel": {"source": "linux", "version": "6.8.0-147.147"}}
+
+
+def _ubuntu(*affected):
+    return {"id": "UBUNTU-CVE-2026-46300", "affected": [
+        {"package": {"name": name, "ecosystem": eco},
+         "ranges": [{"type": "ECOSYSTEM",
+                     "events": [{"introduced": "0"}] + ([{"fixed": fix}] if fix else [])}]}
+        for name, eco, fix in affected]}
+
+
+def test_a_kernel_hole_is_judged_by_the_running_kernel():
+    rec = _ubuntu(("linux", "Ubuntu:24.04:LTS", "6.8.0-124.124"),
+                  ("linux", "Ubuntu:22.04:LTS", "5.15.0-200.210"),
+                  ("linux-aws", "Ubuntu:24.04:LTS", "6.8.0-1057.60"))
+    verdict, why = vuln_watch.ubuntu_verdict(rec, _INV, _lt)
+    #Старое ядро 6.8.0-85 лежит на диске, но не загружено, — оно вердикт не портит.
+    assert verdict == "safe" and why == ["работает ядро 6.8.0-147.147, исправлено в 6.8.0-124.124"]
+    old = dict(_INV, kernel={"source": "linux", "version": "6.8.0-85.85"})
+    assert vuln_watch.ubuntu_verdict(rec, old, _lt)[0] == "reboot"
+    alone = dict(old, sources=dict(_INV["sources"], linux=["6.8.0-85.85"]))
+    assert vuln_watch.ubuntu_verdict(rec, alone, _lt)[0] == "exposed"
+    assert vuln_watch.ubuntu_verdict(_ubuntu(("linux", "Ubuntu:24.04:LTS", None)), _INV, _lt)[0] \
+        == "nofix"
+
+
+def test_an_os_package_hole_counts_only_packages_we_have():
+    rec = _ubuntu(("openssl", "Ubuntu:24.04:LTS", "3.0.13-0ubuntu3.20"),
+                  ("nginx", "Ubuntu:24.04:LTS", None))
+    verdict, why = vuln_watch.ubuntu_verdict(rec, _INV, _lt)
+    assert verdict == "exposed" and "openssl 3.0.13-0ubuntu3.16" in why[0]
+    assert vuln_watch.ubuntu_verdict(_ubuntu(("nginx", "Ubuntu:24.04:LTS", None)), _INV, _lt) \
+        == ("safe", ["по данным Ubuntu затронутых пакетов на сервере нет"])
+    #Список пакетов не прочитался — это «не удалось», а не «не задевает».
+    assert vuln_watch.ubuntu_verdict(rec, {}, _lt)[0] == "unknown"
+
+
+def test_inventory_reads_installed_sources_and_the_running_kernel():
+    listing = "\n".join((
+        "ii |linux-image-6.8.0-147-generic|linux-signed|6.8.0-147.147",
+        "ii |linux-modules-6.8.0-147-generic|linux|6.8.0-147.147",
+        "ii |linux-image-6.8.0-85-generic|linux-signed|6.8.0-85.85",
+        "un |linux-modules-extra-6.8.0-147-generic|linux-modules-extra-6.8.0-147-generic|",
+        "ii |libssl3t64|openssl|3.0.13-0ubuntu3.16"))
+    files = {"/etc/os-release": 'NAME="Ubuntu"\nVERSION_ID="24.04"\n',
+             "/proc/version_signature": "Ubuntu 6.8.0-147.147-generic 6.8.12\n"}
+    inv = vuln_watch.deb_inventory(run=lambda cmd, timeout=600: (0, listing),
+                                   read=lambda p: files.get(p, ""),
+                                   kernel_release="6.8.0-147-generic")
+    assert inv["release"] == "24.04" and inv["kernel"] == {"source": "linux",
+                                                           "version": "6.8.0-147.147"}
+    assert inv["sources"]["linux"] == ["6.8.0-147.147", "6.8.0-85.85"]
+    assert "linux-signed" not in inv["sources"] and inv["kernel_sources"] == ["linux"]
+    assert "linux-modules-extra-6.8.0-147-generic" not in inv["sources"], "не установлен"
+
+
+def test_python_and_caddy_exploits_are_checked_by_their_own_registries():
+    pkgs = {"pillow": "12.3.0"}
+    entry = {"cve": "CVE-2026-1", "product": "Python Pillow"}
+    assert vuln_watch.pypi_verdict("CVE-2026-1", entry["product"], pkgs, [])[0] == "safe"
+    hole = {"package": "pillow", "version": "12.3.0", "id": "GHSA-x", "aliases": ["CVE-2026-1"],
+            "fixed": "12.3.1"}
+    assert vuln_watch.pypi_verdict("CVE-2026-1", entry["product"], pkgs, [hole])[0] == "exposed"
+    assert vuln_watch.pypi_verdict("CVE-2026-1", entry["product"], pkgs, None)[0] == "unknown"
+
+    asked = []
+
+    def fetch(url, payload=None, timeout=30):
+        asked.append(payload)
+        return {"vulns": [{"id": "GHSA-c", "aliases": ["CVE-2026-9"], "affected": [
+            {"package": {"name": vuln_watch.CADDY_GO, "ecosystem": "Go"},
+             "ranges": [{"events": [{"introduced": "0"}, {"fixed": "2.11.8"}]}]}]}]}
+    assert vuln_watch.caddy_verdict("CVE-2026-9", _INV, fetch) \
+        == ("exposed", ["Caddy 2.11.7, исправлено в 2.11.8"])
+    assert vuln_watch.caddy_verdict("CVE-2026-8", _INV, fetch)[0] == "safe"
+    assert asked[0]["version"] == "2.11.7"
+
+
+def test_no_data_or_a_failed_check_is_unknown_not_safe():
+    import urllib.error
+
+    def missing(url, payload=None, timeout=30):
+        raise urllib.error.HTTPError(url, 404, "nf", {}, None)
+
+    def broken(url, payload=None, timeout=30):
+        raise TimeoutError
+    entry = {"cve": "CVE-2026-46300", "product": "Linux Kernel"}
+    assert vuln_watch.kev_verdict(entry, _INV, {}, [], fetch=missing, lt=_lt)["verdict"] == "unknown"
+    assert vuln_watch.kev_verdict(entry, _INV, {}, [], fetch=broken, lt=_lt)["verdict"] == "unknown"
+    rec = _ubuntu(("linux", "Ubuntu:24.04:LTS", "6.8.0-124.124"))
+    res = vuln_watch.kev_verdict(entry, _INV, {}, [], fetch=lambda *a, **k: rec, lt=_lt)
+    assert res["verdict"] == "safe" and "6.8.0-124.124" in vuln_watch.verdict_line(res)
+
+
+def test_the_run_judges_exploits_after_patching_and_writes_only_about_hits(monkeypatch, tmp_path):
+    from app import alarm
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    feed = [{"cveID": "CVE-2026-46300", "vendorProject": "Linux", "product": "Kernel",
+             "vulnerabilityName": "ядро", "dateAdded": today},
+            {"cveID": "CVE-2026-7", "vendorProject": "OpenBSD", "product": "OpenSSH",
+             "vulnerabilityName": "ssh", "dateAdded": today}]
+    order, sent = [], []
+    (tmp_path / "state.json").write_text(json.dumps({"kev_alerted": []}), encoding="utf-8")
+    monkeypatch.setattr(vuln_watch, "STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(vuln_watch, "kev_feed", lambda: feed)
+    monkeypatch.setattr(vuln_watch, "installed", lambda: {})
+    monkeypatch.setattr(vuln_watch, "find_python_vulns", lambda pkgs: [])
+    monkeypatch.setattr(vuln_watch, "apply_os", lambda: order.append("os")
+                        or {"ok": True, "installed": [], "error": ""})
+    monkeypatch.setattr(vuln_watch, "deb_inventory", lambda: order.append("inventory") or _INV)
+    monkeypatch.setattr(vuln_watch, "kev_verdict", lambda v, inv, pkgs, vulns: {
+        "verdict": "safe" if v["cve"] == "CVE-2026-46300" else "exposed", "why": []})
+    monkeypatch.setattr(alarm, "raise_alarm", lambda kind, title, lines, **k: sent.append(k["key"]))
+    monkeypatch.setattr(vuln_watch, "in_class_hours", lambda: False)
+    vuln_watch.main([])
+    assert order == ["os", "inventory"], "вердикт до обновлений описывал бы прежнюю машину"
+    assert sent == ["kev:CVE-2026-7:exposed"]
+    week = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))["kev_week"]
+    assert {v["cve"]: v["verdict"] for v in week} == {"CVE-2026-46300": "safe",
+                                                      "CVE-2026-7": "exposed"}
+    #Часы пар: проверка и письма идут, а ничего не ставится — журнал не перезапускается.
+    order.clear()
+    monkeypatch.setattr(vuln_watch, "in_class_hours", lambda: True)
+    vuln_watch.main([])
+    assert order == ["inventory"]
+    vuln_watch.main(["--now"])
+    assert order == ["inventory", "os", "inventory"], "--now — решение человека"
+
+
+def test_class_hours_are_weekdays_and_saturday_from_830_to_1830():
+    from datetime import datetime
+    assert vuln_watch.in_class_hours(datetime(2026, 10, 29, 9, 0))        # четверг
+    assert vuln_watch.in_class_hours(datetime(2026, 10, 31, 18, 29))      # суббота
+    assert not vuln_watch.in_class_hours(datetime(2026, 10, 29, 18, 30))
+    assert not vuln_watch.in_class_hours(datetime(2026, 10, 29, 8, 29))
+    assert not vuln_watch.in_class_hours(datetime(2026, 11, 1, 12, 0))    # воскресенье
+
+
+def test_an_unidentified_running_kernel_is_unknown_not_safe():
+    rec = _ubuntu(("linux", "Ubuntu:24.04:LTS", "6.8.0-999.999"))
+    blind = dict(_INV, kernel={"source": "", "version": ""})
+    assert vuln_watch.ubuntu_verdict(rec, blind, _lt)[0] == "unknown"

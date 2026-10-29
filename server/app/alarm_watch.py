@@ -1,13 +1,14 @@
 """Сторож тревог (служба gb-alarm): журнал системы, ключи входа, здоровье сайта (27.10.2026).
 
-Три потока в одном процессе, письмо шлёт `alarm.raise_alarm`:
+Четыре потока в одном процессе, письмо шлёт `alarm.raise_alarm`:
   • журнал — `journalctl -f -o json`: вход по ssh не нашим ключом или паролем, вход в
     консоль хостинга, упавшая служба, убийство процесса по памяти, вход учёткой-приманкой,
     правка учётных записей ОС;
   • файлы — раз в минуту хеши ключей входа, учёток ОС, sshd, cron и юнитов systemd.
     База хешей лежит на диске, поэтому видна и правка, сделанная, пока сторож лежал;
   • здоровье — раз в минуту /health журнала и сайта снаружи. Три промаха подряд —
-    перезапуск службы и письмо, возврат — письмо «снова работает».
+    перезапуск службы и письмо, возврат — письмо «снова работает»;
+  • задачи — раз в 5 минут снимок таймеров systemd для вкладки «Автоматика» (`jobs_status`).
 
 «Свои» ключи — отпечатки в `TRUSTED_KEYS` (заводятся при установке из нынешних
 authorized_keys). Ключ, которого там нет, — тревога, даже если его уже дописали в
@@ -425,6 +426,17 @@ def _loop(name: str, fn, every: float) -> None:
         time.sleep(every)
 
 
+def _systemctl(cmd: list) -> tuple:
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+    return p.returncode, p.stdout
+
+
+def jobs_tick() -> None:
+    """Снимок таймеров и служб для вкладки «Автоматика»: сам журнал systemctl не зовёт (§16)."""
+    from . import jobs_status
+    jobs_status.write_snapshot(_systemctl)
+
+
 def health_tick(health: Health, now: float | None = None) -> str:
     """Минутный проход: проверка здоровья, счёт доступности для письма, досылка тревог."""
     now = time.time() if now is None else now
@@ -447,10 +459,13 @@ def main() -> int:
         trusted["keys"] = read_trusted() or trusted["keys"]
         check_files()
 
+    from .jobs_status import SNAPSHOT_S
     threads = [threading.Thread(target=follow_journal, args=(trusted,), daemon=True),
                threading.Thread(target=_loop, args=("файлы", files_tick, TICK_S), daemon=True),
                threading.Thread(target=_loop, args=("здоровье", lambda: health_tick(health),
                                                     TICK_S),
+                                daemon=True),
+               threading.Thread(target=_loop, args=("задачи", jobs_tick, SNAPSHOT_S),
                                 daemon=True)]
     for t in threads:
         t.start()

@@ -805,6 +805,7 @@ def _images(d: dict) -> dict:
 
 def _security_block(sec: dict) -> str:
     """Защита: уязвимости и автообновления (`vuln_watch`) и тревоги за сутки (`alarm`)."""
+    from . import vuln_watch
     al = sec.get("alarms") or {}
     if not sec.get("known") and not al.get("known"):
         return ""
@@ -825,12 +826,16 @@ def _security_block(sec: dict) -> str:
         #(«дыр нет» читалось как «ничего не делали», 27.10.2026).
         week = sec.get("kev_week") or []
         ours = [v for v in week if v.get("ours")]
+        hit = [v for v in ours if v.get("verdict") in ("exposed", "nofix")]
         if sec.get("kev_total"):
+            #Цвет — по вердикту для нашей машины, а не по совпадению названия продукта.
+            calm = all(v.get("verdict") == "safe" for v in ours)
             rows.append(_status_row("🌍 Новые эксплойты в мире за неделю",
-                                    "%d · наш стек: %d" % (len(week), len(ours)),
-                                    "warn" if ours else "ok"))
-            rows.extend(_status_note("наш стек · %s — %s" % (v["product"], v["name"]))
-                        for v in ours[:4])
+                                    "%d · наш стек: %d · задевает: %d"
+                                    % (len(week), len(ours), len(hit)),
+                                    "bad" if hit else ("ok" if calm else "warn")))
+            rows.extend(_status_note("наш стек · %s — %s: %s" % (
+                v["product"], v["cve"], vuln_watch.verdict_line(v))) for v in ours[:4])
             others = [v for v in week if not v.get("ours")][:3]
             if others:
                 rows.append(_status_note("не наш стек: " + "; ".join(
@@ -945,9 +950,11 @@ def render_text(d: dict) -> str:
             lines.append("  пакетов Python проверено: %s" % sec["checked_python"])
         week = sec.get("kev_week") or []
         if sec.get("kev_total"):
+            from . import vuln_watch
             lines.append("  новых эксплойтов в мире за неделю: %d, наш стек: %d"
                          % (len(week), sum(1 for v in week if v.get("ours"))))
-            lines += ["    %s — %s" % (v["product"], v["name"]) for v in week if v.get("ours")][:4]
+            lines += ["    %s — %s: %s" % (v["product"], v["cve"], vuln_watch.verdict_line(v))
+                      for v in week if v.get("ours")][:4]
     al = sec.get("alarms") or {}
     av = al.get("availability") or {}
     if av.get("known"):

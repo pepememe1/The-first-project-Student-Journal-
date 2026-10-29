@@ -107,6 +107,15 @@ def server_backups(_admin: User = Depends(require_admin)):
             "total_size": sum(i["size"] for i in items)}
 
 
+@router.get("/jobs")
+def server_jobs(_admin: User = Depends(require_admin)):
+    """Автоматика: задачи по расписанию, когда отработали и успешно ли (`jobs_status`).
+
+    Снимок systemd пишет сторож тревог, здесь только чтение файлов (§16)."""
+    from .. import jobs_status
+    return jobs_status.overview()
+
+
 @router.get("/tree")
 def server_tree(path: str = Query(""), _admin: User = Depends(require_admin)):
     """Обзор каталога развёртывания: что сколько занимает.
